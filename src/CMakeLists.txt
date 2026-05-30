@@ -264,9 +264,13 @@ elseif(${CURRENT_PLAT} STREQUAL ${PLAT_IOS})
     ${COREMEDIA_LIB}
   )
 
+  # gpupixel_gl_include.h uses #import <UIKit/UIKit.h> and gpupixel_context.h
+  # uses EAGLContext* — both are ObjC types that C++ (.cc) cannot parse.
+  # Telling Xcode to treat every source file in this target as ObjC++ fixes it
+  # without renaming any file.
   set_target_properties(${gpupixel_libs_name} PROPERTIES
-    FRAMEWORK TRUE
-    MACOSX_FRAMEWORK_INFO_PLIST "${PROJECT_SOURCE_DIR}/src/Info.plist.in"
+    XCODE_ATTRIBUTE_GCC_INPUT_FILETYPE sourcecode.cpp.objcpp
+    XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
     XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "13.0"
   )
 
