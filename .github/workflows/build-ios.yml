@@ -7,8 +7,11 @@ name: Build iOS Library
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
     paths:
       # Chỉ build lại khi có thay đổi ở code thật — bỏ qua docs/scripts
+      # Lưu ý: paths filter không áp dụng cho tag push — tag luôn trigger build
       - 'src/**'
       - 'include/**'
       - 'third_party/**'
@@ -23,9 +26,6 @@ on:
         default: 'Release'
         type: choice
         options: [Release, Debug]
-  push:
-    tags:
-      - 'v*'
 
 jobs:
   build-ios:
