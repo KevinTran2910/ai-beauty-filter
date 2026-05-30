@@ -1,0 +1,156 @@
+name: Build iOS Library
+
+# Khi nào workflow này chạy:
+#   1. Push lên branch main (tự động)
+#   2. Bấm nút "Run workflow" trên GitHub UI (thủ công)
+#   3. Tạo tag release v* (tự động đính kèm vào Release)
+on:
+  push:
+    branches: [main]
+    paths:
+      # Chỉ build lại khi có thay đổi ở code thật — bỏ qua docs/scripts
+      - 'src/**'
+      - 'include/**'
+      - 'third_party/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+    # Cho phép chạy thủ công với tùy chọn
+    inputs:
+      build_type:
+        description: 'Build type (Release hoặc Debug)'
+        required: false
+        default: 'Release'
+        type: choice
+        options: [Release, Debug]
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-ios:
+    name: Build libbeautyfilter.a (iOS arm64)
+    runs-on: macos-14          # Apple Silicon runner — nhanh hơn macos-13 cho arm64
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Lấy source code
+      # -----------------------------------------------------------------------
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive   # clone luôn third_party nếu dùng git submodule
+
+      # -----------------------------------------------------------------------
+      # 2. Chọn đúng phiên bản Xcode
+      #    macos-14 runner có nhiều phiên bản Xcode — chọn bản ổn định nhất
+      # -----------------------------------------------------------------------
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      # -----------------------------------------------------------------------
+      # 3. Cache thư mục build để lần sau nhanh hơn
+      #    Cache key thay đổi khi CMakeLists.txt hoặc source thay đổi
+      # -----------------------------------------------------------------------
+      - name: Cache CMake build directory
+        uses: actions/cache@v4
+        with:
+          path: build/ios
+          key: ios-cmake-${{ hashFiles('CMakeLists.txt', 'src/CMakeLists.txt', 'third_party/CMakeLists.txt') }}
+          restore-keys: |
+            ios-cmake-
+
+      # -----------------------------------------------------------------------
+      # 4. Cài CMake nếu chưa có (macos-14 runner thường đã có sẵn)
+      # -----------------------------------------------------------------------
+      - name: Ensure CMake is available
+        run: |
+          if ! command -v cmake &>/dev/null; then
+            brew install cmake
+          fi
+          cmake --version
+
+      # -----------------------------------------------------------------------
+      # 5. CMake configure
+      # -----------------------------------------------------------------------
+      - name: Configure CMake for iOS
+        run: |
+          cmake "$GITHUB_WORKSPACE" \
+            -B "$GITHUB_WORKSPACE/build/ios" \
+            -G Xcode \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/ios.toolchain.cmake" \
+            -DPLATFORM=OS64 \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/output/ios" \
+            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type || 'Release' }} \
+            -DGPUPIXEL_BUILD_SHARED_LIBS=OFF \
+            -DGPUPIXEL_ENABLE_FACE_DETECTOR=OFF \
+            -DGPUPIXEL_BUILD_DESKTOP_DEMO=OFF \
+            -DDEPLOYMENT_TARGET=13.0
+
+      # -----------------------------------------------------------------------
+      # 6. Build
+      #    -jobs $(sysctl -n hw.ncpu) = dùng tất cả CPU cores
+      # -----------------------------------------------------------------------
+      - name: Build
+        run: |
+          cmake --build "$GITHUB_WORKSPACE/build/ios" \
+            --config ${{ github.event.inputs.build_type || 'Release' }} \
+            -- -sdk iphoneos -jobs $(sysctl -n hw.ncpu)
+
+      # -----------------------------------------------------------------------
+      # 7. Install — copy .a và headers vào output/ios/
+      # -----------------------------------------------------------------------
+      - name: Install
+        run: |
+          cmake --install "$GITHUB_WORKSPACE/build/ios" \
+            --config ${{ github.event.inputs.build_type || 'Release' }}
+
+      # -----------------------------------------------------------------------
+      # 8. Kiểm tra nhanh — đảm bảo file .a tồn tại và không rỗng
+      # -----------------------------------------------------------------------
+      - name: Verify output
+        run: |
+          echo "=== Nội dung output/ios/ ==="
+          find output/ios -type f | sort
+
+          LIB="output/ios/lib/libbeautyfilter.a"
+          if [ ! -f "$LIB" ]; then
+            echo "LỖI: $LIB không tồn tại!"
+            exit 1
+          fi
+
+          SIZE=$(du -sh "$LIB" | cut -f1)
+          echo "✓ libbeautyfilter.a tồn tại — kích thước: $SIZE"
+
+          # In danh sách symbols để debug nếu cần
+          xcrun nm "$LIB" 2>/dev/null | grep "T _GPUPixel" | head -20 || true
+
+      # -----------------------------------------------------------------------
+      # 9. Upload artifact — lưu trên GitHub 90 ngày
+      #    Bất kỳ ai có quyền truy cập repo đều download được
+      # -----------------------------------------------------------------------
+      - name: Upload iOS library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbeautyfilter-ios-${{ github.sha }}
+          path: |
+            output/ios/lib/libbeautyfilter.a
+            output/ios/include/
+          retention-days: 90
+          if-no-files-found: error
+
+      # -----------------------------------------------------------------------
+      # 10. Nếu là tag release → đính kèm vào GitHub Release
+      #     Zip lại để download gọn hơn
+      # -----------------------------------------------------------------------
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd output
+          zip -r ../libbeautyfilter-ios-${{ github.ref_name }}.zip ios/
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: libbeautyfilter-ios-${{ github.ref_name }}.zip
