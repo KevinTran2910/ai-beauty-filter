@@ -35,14 +35,18 @@ std::string Util::resource_root_path_ = "";
 
 std::string Util::GetResourcePath(std::string name) {
 #if defined(GPUPIXEL_IOS) || defined(GPUPIXEL_MAC)
+  // If a resource root was explicitly set (e.g. via GPUPixelIOS_Init), use it.
+  // Otherwise fall back to the framework/app bundle path.
+  if (!resource_root_path_.empty()) {
+    return resource_root_path_ + "/" + name;
+  }
   NSString* oc_path = [GPXObjcHelper
       GetResourcePath:[[NSString alloc] initWithUTF8String:name.c_str()]];
   std::string path = [oc_path UTF8String];
-#else
-  std::string path =
-      resource_root_path_.empty() ? name : (resource_root_path_ + "/" + name);
-#endif
   return path;
+#else
+  return resource_root_path_.empty() ? name : (resource_root_path_ + "/" + name);
+#endif
 }
 
 void Util::SetResourceRoot(std::string root) {

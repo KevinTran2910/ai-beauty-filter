@@ -83,7 +83,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/output/ios" \
             -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type || 'Release' }} \
             -DGPUPIXEL_BUILD_SHARED_LIBS=OFF \
-            -DGPUPIXEL_ENABLE_FACE_DETECTOR=OFF \
+            -DGPUPIXEL_ENABLE_FACE_DETECTOR=ON \
             -DGPUPIXEL_BUILD_DESKTOP_DEMO=OFF \
             -DDEPLOYMENT_TARGET=13.0
 
@@ -122,6 +122,13 @@ jobs:
           SIZE=$(du -sh "$LIB" | cut -f1)
           echo "✓ libbeautyfilter.a tồn tại — kích thước: $SIZE"
 
+          # Verify face detection models were installed
+          if [ ! -d "output/ios/models" ]; then
+            echo "LỖI: output/ios/models/ không tồn tại!"
+            exit 1
+          fi
+          echo "✓ models/ tồn tại: $(ls output/ios/models/)"
+
           # In danh sách symbols để debug nếu cần
           xcrun nm "$LIB" 2>/dev/null | grep "T _GPUPixel" | head -20 || true
 
@@ -136,6 +143,8 @@ jobs:
           path: |
             output/ios/lib/libbeautyfilter.a
             output/ios/include/
+            output/ios/models/
+            output/ios/res/
           retention-days: 90
           if-no-files-found: error
 

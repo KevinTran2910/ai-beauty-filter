@@ -1,31 +1,45 @@
-# ---- Custom face landmark library configuration ----
-# Custom face landmark library for wasm
-if(${CURRENT_PLAT} STREQUAL ${PLAT_WASM})
-  # Check if the library exists at the expected path
-  set(face_landmark_lib_path
-      ${CMAKE_CURRENT_SOURCE_DIR}/custom-face-landmark/libs/${CURRENT_PLAT}/liblnm_face_landmark.a)
-  
-  # Regular library import if the file exists
-  add_library(face_landmark_lib STATIC IMPORTED GLOBAL)
-  set_target_properties(
-    face_landmark_lib 
-    PROPERTIES 
-      IMPORTED_LOCATION ${face_landmark_lib_path}
-      INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/custom-face-landmark/include
-  )
+# ---- Face detection library configuration ----
 
-  # Also include the ncnn library
-  set(ncnn_lib_path ${CMAKE_CURRENT_SOURCE_DIR}/ncnn/lib/libncnn.a)
+if(GPUPIXEL_ENABLE_FACE_DETECTOR)
+  if(${CURRENT_PLAT} STREQUAL ${PLAT_WASM})
+    # WASM: custom ncnn-based face landmark library
+    set(face_landmark_lib_path
+        ${CMAKE_CURRENT_SOURCE_DIR}/custom-face-landmark/libs/${CURRENT_PLAT}/liblnm_face_landmark.a)
 
-  add_library(ncnn STATIC IMPORTED GLOBAL)
-  
-  set_target_properties(
-    ncnn PROPERTIES IMPORTED_LOCATION ${ncnn_lib_path}
-    INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/ncnn/include)
-  target_link_libraries(face_landmark_lib INTERFACE ncnn)
+    add_library(face_landmark_lib STATIC IMPORTED GLOBAL)
+    set_target_properties(
+      face_landmark_lib
+      PROPERTIES
+        IMPORTED_LOCATION ${face_landmark_lib_path}
+        INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/custom-face-landmark/include
+    )
 
-  # Define WITH_SIMD to enable SIMD support in the custom face landmark library
-  add_compile_definitions(WITH_SIMD)
+    set(ncnn_lib_path ${CMAKE_CURRENT_SOURCE_DIR}/ncnn/lib/libncnn.a)
+    add_library(ncnn STATIC IMPORTED GLOBAL)
+    set_target_properties(
+      ncnn PROPERTIES IMPORTED_LOCATION ${ncnn_lib_path}
+      INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/ncnn/include)
+    target_link_libraries(face_landmark_lib INTERFACE ncnn)
+
+    add_compile_definitions(WITH_SIMD)
+
+  elseif(${CURRENT_PLAT} STREQUAL ${PLAT_IOS})
+    # iOS: mars-face-kit prebuilt static library + MNN neural network framework
+    set(mars_face_header ${CMAKE_CURRENT_SOURCE_DIR}/mars-face-kit/include)
+
+    add_library(marsface STATIC IMPORTED GLOBAL)
+    set_target_properties(
+      marsface PROPERTIES
+        IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/mars-face-kit/libs/ios/libmars-face-kit.a
+        INTERFACE_INCLUDE_DIRECTORIES ${mars_face_header})
+    add_library(marsface::marsface ALIAS marsface)
+
+    # MNN neural network framework (required by mars-face-kit on iOS)
+    set(mnn_lib_path ${CMAKE_CURRENT_SOURCE_DIR}/mnn/libs/ios)
+    find_library(mnn_lib NAMES "MNN" PATHS ${mnn_lib_path} NO_DEFAULT_PATH)
+    add_library(mnn STATIC IMPORTED GLOBAL)
+    set_target_properties(mnn PROPERTIES IMPORTED_LOCATION ${mnn_lib})
+  endif()
 endif()
 
 # ---- libyuv configuration ----

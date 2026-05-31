@@ -197,9 +197,10 @@ set(lib_image_resource_files
 set(custom_lib_models_resource_dir
     ${PROJECT_SOURCE_DIR}/third_party/custom-face-landmark/models)
 
-# iOS: add SinkView source
+# iOS: add ObjcView + SinkView rendering sources
 if(${CURRENT_PLAT} STREQUAL ${PLAT_IOS})
   list(APPEND common_source_files
+       ${CMAKE_CURRENT_SOURCE_DIR}/sink/objc_view.mm
        ${CMAKE_CURRENT_SOURCE_DIR}/sink/sink_view.mm)
 endif()
 
@@ -254,14 +255,26 @@ elseif(${CURRENT_PLAT} STREQUAL ${PLAT_IOS})
   find_library(UIKIT_LIB UIKit REQUIRED)
   find_library(COREVIDEO_LIB CoreVideo REQUIRED)
   find_library(COREMEDIA_LIB CoreMedia REQUIRED)
+  find_library(AVFOUNDATION_LIB AVFoundation REQUIRED)
+  find_library(COREML_LIB CoreML REQUIRED)
+  find_library(METAL_LIB Metal REQUIRED)
+
+  set(_ios_face_libs "")
+  if(GPUPIXEL_ENABLE_FACE_DETECTOR)
+    set(_ios_face_libs marsface::marsface mnn)
+  endif()
 
   target_link_libraries(${gpupixel_libs_name} PRIVATE
     yuv stb
+    ${_ios_face_libs}
     ${OPENGLES_LIB}
     ${FOUNDATION_LIB}
     ${UIKIT_LIB}
     ${COREVIDEO_LIB}
     ${COREMEDIA_LIB}
+    ${AVFOUNDATION_LIB}
+    ${COREML_LIB}
+    ${METAL_LIB}
   )
 
   # gpupixel_gl_include.h uses #import <UIKit/UIKit.h> and gpupixel_context.h
@@ -299,5 +312,14 @@ install(
   FILES ${lib_image_resource_files}
   DESTINATION res
   COMPONENT resource)
+
+# iOS: install face detection models alongside the library
+if(${CURRENT_PLAT} STREQUAL ${PLAT_IOS} AND GPUPIXEL_ENABLE_FACE_DETECTOR)
+  set(mars_models_dir ${PROJECT_SOURCE_DIR}/third_party/mars-face-kit/models)
+  install(
+    DIRECTORY ${mars_models_dir}/
+    DESTINATION models
+    COMPONENT resource)
+endif()
 
 
