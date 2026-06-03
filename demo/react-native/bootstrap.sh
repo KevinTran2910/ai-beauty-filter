@@ -91,16 +91,15 @@ cat <<EOF
 
 ✅ Hoàn tất!
 
-⚠️  App CHỈ chạy trên iPhone thật (MNN + mars-face-kit chỉ có lát device, không có
-    lát simulator).
+Chạy nhanh trên SIMULATOR (làm mịn + trắng da; face detection tắt trên simulator):
+  cd ${APP_NAME}
+  npx react-native run-ios --simulator "iPhone 17"
 
-Chạy app:
+Đầy đủ tính năng (thon mặt/to mắt/má hồng) trên IPHONE THẬT:
   open ${APP_NAME}/ios/${APP_NAME}.xcworkspace
-  # Trong Xcode: target ${APP_NAME} → Signing & Capabilities → chọn Team,
-  # cắm iPhone, chọn nó làm destination rồi bấm Run (▶).
+  # Xcode: target ${APP_NAME} → Signing & Capabilities → chọn Team,
+  # cắm iPhone, chọn làm destination rồi Run (▶).
 
-  # hoặc CLI (sau khi đã cấu hình signing):
-  #   cd ${APP_NAME} && npx react-native run-ios --device
-
-Cả hai chế độ "Ảnh" và "Camera" đều chạy trên thiết bị thật.
+Lý do: MNN + mars-face-kit chỉ có lát device → slice simulator build với face
+detection TẮT để chạy được trên máy ảo.
 EOF

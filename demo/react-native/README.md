@@ -26,18 +26,29 @@ demo/react-native/
 Mọi mã native được giao cho app **qua CocoaPod** (`BeautyFilterSDK`), nên project
 Xcode sinh tự động không cần chỉnh tay.
 
-## ⚠️ Chỉ chạy trên thiết bị thật (iPhone arm64)
+## Hỗ trợ Simulator vs Thiết bị thật
 
-SDK dùng `MNN.framework` và `libmars-face-kit.a` cho nhận diện khuôn mặt — cả hai
-**chỉ có lát device (arm64), không có lát simulator**. Do đó app **không build/chạy
-trên iOS Simulator** được; phải dùng iPhone thật.
+`BeautyFilter.xcframework` chứa 2 slice trong cùng 1 framework:
+
+| | Simulator (arm64) | iPhone thật (arm64) |
+|---|---|---|
+| Nhận diện khuôn mặt (MNN + mars) | ❌ tắt | ✅ bật |
+| Làm mịn da / Trắng da | ✅ | ✅ |
+| Thon mặt / To mắt / Má hồng | ❌ (cần landmark) | ✅ |
+| Cần ký (signing) | ❌ | ✅ (Apple ID) |
+
+Lý do: `MNN.framework` và `libmars-face-kit.a` chỉ có **lát device** (không có lát
+simulator). Vì vậy **slice simulator được build với face detection TẮT**
+(`GPUPIXEL_ENABLE_FACE_DETECTOR=OFF`) để chạy độc lập trên Simulator — đủ để test
+luồng app + làm mịn/trắng da bằng ảnh đầu vào. Slice device giữ đầy đủ tính năng.
+CocoaPods tự chọn đúng slice theo SDK đang build.
 
 ## Yêu cầu
 
 - macOS + Xcode (đã thử với Xcode 26.5)
-- Một iPhone thật (arm64) + tài khoản Apple để ký (signing)
 - Node.js ≥ 18, npm
 - CocoaPods (`brew install cocoapods`)
+- Để chạy đầy đủ tính năng: một iPhone thật (arm64) + Apple ID để ký
 - Đã build SDK: `output/ios/BeautyFilter.xcframework` tồn tại
   (nếu chưa hoặc vừa sửa source: chạy `./script/build_ios.sh` ở gốc repo)
 
@@ -48,7 +59,18 @@ cd demo/react-native
 ./bootstrap.sh                 # sinh app, cài deps, link pod, pod install
 ```
 
-Sau đó mở bằng Xcode và chạy lên iPhone:
+### Cách 1 — Simulator (nhanh, không cần iPhone/signing)
+
+```bash
+cd BeautyFilterDemo
+npx react-native run-ios --simulator "iPhone 17"
+```
+
+Chạy được làm mịn + trắng da bằng ảnh đầu vào (face detection tắt trên simulator).
+
+### Cách 2 — iPhone thật (đầy đủ tính năng)
+
+Mở bằng Xcode:
 
 ```bash
 open BeautyFilterDemo/ios/BeautyFilterDemo.xcworkspace
@@ -79,10 +101,11 @@ Trong app:
 1. `npx @react-native-community/cli init BeautyFilterDemo` — sinh app RN.
 2. `npm install` + thêm `@react-native-community/slider`, `react-native-image-picker`.
 3. Copy `app-template/App.tsx` và `app-template/src/` vào app.
-4. Thêm `pod 'BeautyFilterSDK', :path => '../..'` vào `ios/Podfile`.
+4. Thêm `pod 'BeautyFilterSDK', :path => '../../../..'` vào `ios/Podfile`
+   (podspec nằm ở gốc repo).
 5. Thêm quyền `NSPhotoLibraryUsageDescription` + `NSCameraUsageDescription` vào Info.plist.
-6. `RCT_NEW_ARCH_ENABLED=0 pod install` (demo dùng kiến trúc cũ cho ổn định với
-   `RCTViewManager`).
+6. `pod install` (bootstrap có truyền `RCT_NEW_ARCH_ENABLED=0` nhưng RN 0.82+ bỏ
+   qua — app chạy New Architecture; bridge `RCTViewManager` hoạt động qua interop).
 
 Script idempotent: chạy lại sẽ chỉ cập nhật overlay + pod, không sinh lại app.
 
@@ -92,14 +115,18 @@ Script idempotent: chạy lại sẽ chỉ cập nhật overlay + pod, không si
   Native gọi `GPUPixel::SetResourceRoot([[NSBundle mainBundle] resourcePath])` nên
   `GetResourcePath("res/…")` và `("models")` phân giải đúng khi chạy.
 - **MNN.framework** là static framework (ar archive) → được link, không cần embed/sign.
-- **Face detection libs**: pod link thêm `third_party/mars-face-kit/libs/ios/libmars-face-kit.a`
-  + framework `CoreML`, `Metal` (MNN backend).
-- **Sửa SDK**: `src/CMakeLists.txt` trước đây snapshot danh sách nguồn trước khi append
-  `sink_view.mm`/`objc_view.mm` → `SinkView` (render ra UIView) bị thiếu trong thư viện.
-  Đã sửa để build đúng; `objc_view.mm` cũng được vá macro `GL_CALL` (đã bị gỡ khỏi codebase).
-  Sau khi sửa cần chạy lại `./script/build_ios.sh`.
+- **Face detection libs (device-only)**: cho slice **device**, pod link thêm
+  `libmars-face-kit.a` + framework `MNN`, qua key `[sdk=iphoneos*]` trong podspec.
+  Slice **simulator** build với `GPUPIXEL_ENABLE_FACE_DETECTOR=OFF` nên không cần
+  chúng. `CoreML`/`Metal` là system framework (có ở cả 2 SDK).
+- **Sửa SDK** (`src/`): `src/CMakeLists.txt` trước đây snapshot danh sách nguồn trước
+  khi append `sink_view.mm`/`objc_view.mm` → `SinkView` (render ra UIView) bị thiếu.
+  Đã sửa; `objc_view.mm` cũng được vá macro `GL_CALL` (đã bị gỡ khỏi codebase). Và
+  `script/build_ios.sh` giờ build slice simulator với face detection TẮT. Sau khi
+  sửa source cần chạy lại `./script/build_ios.sh`.
 - **Pipeline**: `SourceRawData → BlusherFilter → FaceReshapeFilter → BeautyFaceFilter → SinkView`,
   giống `demo/ios/ios_beauty.mm`. Mỗi lần đổi ảnh/tham số, view decode ảnh sang RGBA,
-  chạy `FaceDetector` (chế độ PICTURE) rồi đẩy 1 frame vào pipeline; `SinkView` render lên view.
-- **New Architecture**: nếu muốn bật Fabric, cần map component qua interop layer; demo
-  này tắt New Arch cho đơn giản.
+  (trên device) chạy `FaceDetector` (chế độ PICTURE) rồi đẩy 1 frame vào pipeline;
+  `SinkView` render lên view.
+- **New Architecture**: bridge legacy `RCTViewManager` + `requireNativeComponent`
+  chạy qua interop layer của New Arch (mặc định ở RN 0.85).
