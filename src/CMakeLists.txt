@@ -197,9 +197,12 @@ set(lib_image_resource_files
 set(custom_lib_models_resource_dir
     ${PROJECT_SOURCE_DIR}/third_party/custom-face-landmark/models)
 
-# iOS: add ObjcView + SinkView rendering sources
+# iOS: add ObjcView + SinkView rendering sources.
+# NOTE: append to lib_source_code_files (the list add_library() actually uses);
+# common_source_files was already snapshotted into it above, so appending there
+# would silently drop these files from the build.
 if(${CURRENT_PLAT} STREQUAL ${PLAT_IOS})
-  list(APPEND common_source_files
+  list(APPEND lib_source_code_files
        ${CMAKE_CURRENT_SOURCE_DIR}/sink/objc_view.mm
        ${CMAKE_CURRENT_SOURCE_DIR}/sink/sink_view.mm)
 endif()

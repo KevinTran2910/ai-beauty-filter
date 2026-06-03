@@ -11,6 +11,13 @@
 #include "core/gpupixel_program.h"
 #include "utils/util.h"
 
+// GL_CALL used to be an error-checking wrapper around GL calls; it has since
+// been removed from the codebase while objc_view.mm (previously not built) kept
+// using it. Define it as a pass-through so the GL calls compile unchanged.
+#ifndef GL_CALL
+#define GL_CALL(x) x
+#endif
+
 using namespace gpupixel;
 
 @interface ObjcView () {

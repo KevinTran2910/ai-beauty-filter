@@ -2,13 +2,11 @@
 # =============================================================================
 # Build script for iOS — produces BeautyFilter.xcframework
 #
-# Builds three slices:
+# Builds two slices (arm64 only — mars-face-kit & MNN have no x86_64 binary):
 #   1. Device      arm64        (iphoneos)
-#   2. Simulator   x86_64       (iphonesimulator — Intel Mac / CI)
-#   3. Simulator   arm64        (iphonesimulator — Apple Silicon Mac)
-# Combines slices 2+3 with lipo, then packages into an XCFramework.
+#   2. Simulator   arm64        (iphonesimulator — Apple Silicon Mac)
 #
-# Requires: macOS + Xcode
+# Requires: macOS + Xcode + cmake
 # =============================================================================
 
 set -e
@@ -39,13 +37,15 @@ fi
 # ---- Helper ------------------------------------------------------------------
 
 cmake_build() {
-  local platform="$1"   # OS64 | SIMULATOR64 | SIMULATORARM64
-  local sdk="$2"        # iphoneos | iphonesimulator
+  local platform="$1"      # OS64 | SIMULATOR64 | SIMULATORARM64
+  local sdk="$2"           # iphoneos | iphonesimulator
   local build_dir="$3"
   local install_dir="$4"
+  local face_detector="${5:-ON}"  # ON for device; OFF for simulator (MNN +
+                                  # mars-face-kit are device-only static libs)
 
   echo ""
-  echo "=== Building platform=${platform} sdk=${sdk} ==="
+  echo "=== Building platform=${platform} sdk=${sdk} face_detector=${face_detector} ==="
 
   mkdir -p "${build_dir}"
 
@@ -57,7 +57,7 @@ cmake_build() {
     -DCMAKE_INSTALL_PREFIX="${install_dir}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DGPUPIXEL_BUILD_SHARED_LIBS=OFF \
-    -DGPUPIXEL_ENABLE_FACE_DETECTOR=ON \
+    -DGPUPIXEL_ENABLE_FACE_DETECTOR="${face_detector}" \
     -DGPUPIXEL_BUILD_DESKTOP_DEMO=OFF \
     -DDEPLOYMENT_TARGET=13.0
 
@@ -71,35 +71,18 @@ cmake_build OS64 iphoneos \
   "${BUILD_BASE}/ios_device" \
   "${BUILD_BASE}/ios_device_install"
 
-# ---- 2. Simulator: x86_64 (Intel Mac / GitHub Actions) ----------------------
-
-cmake_build SIMULATOR64 iphonesimulator \
-  "${BUILD_BASE}/ios_sim_x86" \
-  "${BUILD_BASE}/ios_sim_x86_install"
-
-# ---- 3. Simulator: arm64 (Apple Silicon Mac) ---------------------------------
+# ---- 2. Simulator: arm64 (Apple Silicon Mac) ---------------------------------
+# Face detection OFF on simulator: MNN.framework and libmars-face-kit.a ship as
+# device-only static binaries (no simulator slice), so a simulator slice that
+# referenced them could never be linked. The simulator slice therefore supports
+# only the landmark-free filters (skin smoothing / whitening).
 
 cmake_build SIMULATORARM64 iphonesimulator \
   "${BUILD_BASE}/ios_sim_arm64" \
-  "${BUILD_BASE}/ios_sim_arm64_install"
+  "${BUILD_BASE}/ios_sim_arm64_install" \
+  OFF
 
-# ---- 4. Lipo: combine simulator slices into fat binary -----------------------
-
-echo ""
-echo "=== Combining simulator slices with lipo ==="
-
-SIM_FAT_DIR="${BUILD_BASE}/ios_sim_fat"
-mkdir -p "${SIM_FAT_DIR}"
-
-lipo -create \
-  "${BUILD_BASE}/ios_sim_x86_install/lib/libbeautyfilter.a" \
-  "${BUILD_BASE}/ios_sim_arm64_install/lib/libbeautyfilter.a" \
-  -output "${SIM_FAT_DIR}/libbeautyfilter.a"
-
-echo "Simulator fat binary architectures:"
-lipo -info "${SIM_FAT_DIR}/libbeautyfilter.a"
-
-# ---- 5. Package XCFramework --------------------------------------------------
+# ---- 3. Package XCFramework --------------------------------------------------
 
 echo ""
 echo "=== Creating XCFramework ==="
@@ -110,7 +93,7 @@ mkdir -p "${OUTPUT_DIR}"
 xcodebuild -create-xcframework \
   -library "${BUILD_BASE}/ios_device_install/lib/libbeautyfilter.a" \
     -headers "${PROJECT_DIR}/include" \
-  -library "${SIM_FAT_DIR}/libbeautyfilter.a" \
+  -library "${BUILD_BASE}/ios_sim_arm64_install/lib/libbeautyfilter.a" \
     -headers "${PROJECT_DIR}/include" \
   -output "${XCFRAMEWORK_OUT}"
 
@@ -119,6 +102,7 @@ xcodebuild -create-xcframework \
 echo ""
 echo "=== Copying headers, resources, models and MNN framework ==="
 
+rm -rf "${OUTPUT_DIR}/include" "${OUTPUT_DIR}/res" "${OUTPUT_DIR}/models" "${OUTPUT_DIR}/MNN.framework"
 cp -r "${PROJECT_DIR}/include" "${OUTPUT_DIR}/include"
 cp -r "${PROJECT_DIR}/src/res" "${OUTPUT_DIR}/res"
 cp -r "${PROJECT_DIR}/third_party/mars-face-kit/models" "${OUTPUT_DIR}/models"
