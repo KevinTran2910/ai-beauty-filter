@@ -28,7 +28,13 @@
 #endif
 
 //------------- ENABLE_GL_CHECK Begin ------------ //
+#ifndef ENABLE_GL_CHECK
+#if defined(NDEBUG)
+#define ENABLE_GL_CHECK false
+#else
 #define ENABLE_GL_CHECK true
+#endif
+#endif
 #if ENABLE_GL_CHECK
 #define CHECK_GL(glFunc)                                                      \
   glFunc;                                                                     \

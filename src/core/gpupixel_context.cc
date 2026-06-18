@@ -73,6 +73,10 @@
 #include <emscripten/html5.h>
 #endif
 
+#if defined(GPUPIXEL_ANDROID)
+#include <android/native_window.h>
+#endif
+
 namespace gpupixel {
 
 #if defined(GPUPIXEL_IOS) || defined(GPUPIXEL_MAC)
@@ -173,6 +177,7 @@ void GPUPixelContext::CreateContext() {
   [image_processing_context_ setValues:&interval
                           forParameter:NSOpenGLContextParameterSwapInterval];
 #elif defined(GPUPIXEL_ANDROID)
+  egl_window_surface_ = EGL_NO_SURFACE;
   // Initialize EGL
   egl_display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
   if (egl_display_ == EGL_NO_DISPLAY) {
@@ -279,8 +284,13 @@ void GPUPixelContext::UseAsCurrent() {
     [image_processing_context_ makeCurrentContext];
   }
 #elif defined(GPUPIXEL_ANDROID)
-  if (eglGetCurrentContext() != egl_context_) {
-    eglMakeCurrent(egl_display_, egl_surface_, egl_surface_, egl_context_);
+  EGLSurface target_surface =
+      using_window_surface_ && egl_window_surface_ != EGL_NO_SURFACE
+          ? egl_window_surface_
+          : egl_surface_;
+  if (eglGetCurrentContext() != egl_context_ ||
+      eglGetCurrentSurface(EGL_DRAW) != target_surface) {
+    eglMakeCurrent(egl_display_, target_surface, target_surface, egl_context_);
   }
 #elif defined(GPUPIXEL_WIN) || defined(GPUPIXEL_LINUX)
   if (glfwGetCurrentContext() != gl_context_) {
@@ -297,17 +307,78 @@ void GPUPixelContext::PresentBufferForDisplay() {
 #elif defined(GPUPIXEL_MAC)
   // No implementation needed
 #elif defined(GPUPIXEL_ANDROID)
-  // For offscreen rendering, no need to swap buffers
-  // If display to screen is needed, use eglSwapBuffers(egl_display_,
-  // egl_surface_);
+  if (using_window_surface_ && egl_window_surface_ != EGL_NO_SURFACE) {
+    eglSwapBuffers(egl_display_, egl_window_surface_);
+  }
 #endif
 }
+
+#if defined(GPUPIXEL_ANDROID)
+bool GPUPixelContext::SetWindowSurface(ANativeWindow* window) {
+  bool ok = false;
+  SyncRunWithContext([&] {
+    if (egl_display_ == EGL_NO_DISPLAY || egl_context_ == EGL_NO_CONTEXT ||
+        window == nullptr) {
+      return;
+    }
+    if (egl_window_surface_ != EGL_NO_SURFACE) {
+      if (using_window_surface_) {
+        eglMakeCurrent(egl_display_, egl_surface_, egl_surface_, egl_context_);
+        using_window_surface_ = false;
+      }
+      eglDestroySurface(egl_display_, egl_window_surface_);
+      egl_window_surface_ = EGL_NO_SURFACE;
+    }
+    egl_window_surface_ =
+        eglCreateWindowSurface(egl_display_, egl_config_, window, nullptr);
+    if (egl_window_surface_ == EGL_NO_SURFACE) {
+      Util::Log("ERROR", "Failed to create EGL window surface");
+      return;
+    }
+    ok = true;
+  });
+  return ok;
+}
+
+void GPUPixelContext::ClearWindowSurface() {
+  SyncRunWithContext([&] {
+    if (egl_display_ == EGL_NO_DISPLAY) {
+      return;
+    }
+    if (using_window_surface_) {
+      eglMakeCurrent(egl_display_, egl_surface_, egl_surface_, egl_context_);
+      using_window_surface_ = false;
+    }
+    if (egl_window_surface_ != EGL_NO_SURFACE) {
+      eglDestroySurface(egl_display_, egl_window_surface_);
+      egl_window_surface_ = EGL_NO_SURFACE;
+    }
+  });
+}
+
+bool GPUPixelContext::UseWindowSurface() {
+  if (egl_window_surface_ == EGL_NO_SURFACE) {
+    return false;
+  }
+  using_window_surface_ = true;
+  return true;
+}
+
+void GPUPixelContext::UsePbufferSurface() {
+  using_window_surface_ = false;
+}
+#endif
 
 void GPUPixelContext::ReleaseContext() {
 #if defined(GPUPIXEL_ANDROID)
   if (egl_display_ != EGL_NO_DISPLAY) {
     eglMakeCurrent(egl_display_, EGL_NO_SURFACE, EGL_NO_SURFACE,
                    EGL_NO_CONTEXT);
+
+    if (egl_window_surface_ != EGL_NO_SURFACE) {
+      eglDestroySurface(egl_display_, egl_window_surface_);
+      egl_window_surface_ = EGL_NO_SURFACE;
+    }
 
     if (egl_surface_ != EGL_NO_SURFACE) {
       eglDestroySurface(egl_display_, egl_surface_);

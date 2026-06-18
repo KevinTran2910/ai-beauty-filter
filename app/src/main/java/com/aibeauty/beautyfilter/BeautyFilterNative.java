@@ -1,5 +1,7 @@
 package com.aibeauty.beautyfilter;
 
+import android.view.Surface;
+
 import java.nio.ByteBuffer;
 
 /**
@@ -42,6 +44,17 @@ public final class BeautyFilterNative {
 
     private static native boolean nativeProcessInto(
             ByteBuffer inRgba, int width, int height, ByteBuffer outRgba);
+
+    private static native boolean nativeSetOutputSurface(Surface surface, int width, int height);
+
+    private static native void nativeResizeOutputSurface(int width, int height);
+
+    private static native void nativeClearOutputSurface();
+
+    private static native boolean nativeProcessPreview(
+            ByteBuffer inRgba, int width, int height, int rotationDegrees, boolean mirror);
+
+    private static native float[] nativeGetPerfStats();
 
     private static native void nativeDestroy();
 
@@ -93,6 +106,35 @@ public final class BeautyFilterNative {
     public static boolean processInto(
             ByteBuffer inRgba, int width, int height, ByteBuffer outRgba) {
         return nativeProcessInto(inRgba, width, height, outRgba);
+    }
+
+    /** Attach the native preview renderer to an Android surface. */
+    public static boolean setOutputSurface(Surface surface, int width, int height) {
+        return nativeSetOutputSurface(surface, width, height);
+    }
+
+    /** Update the native preview viewport after a surface size change. */
+    public static void resizeOutputSurface(int width, int height) {
+        nativeResizeOutputSurface(width, height);
+    }
+
+    /** Detach and destroy the native preview surface. */
+    public static void clearOutputSurface() {
+        nativeClearOutputSurface();
+    }
+
+    /** Render one RGBA frame directly to the attached output surface. */
+    public static boolean processPreview(
+            ByteBuffer inRgba, int width, int height, int rotationDegrees, boolean mirror) {
+        return nativeProcessPreview(inRgba, width, height, rotationDegrees, mirror);
+    }
+
+    /**
+     * Native performance stats:
+     * [0] preview path ms, [1] readback path ms, [2] surface width, [3] surface height.
+     */
+    public static float[] getPerfStats() {
+        return nativeGetPerfStats();
     }
 
     /** Release the pipeline and GL resources. */

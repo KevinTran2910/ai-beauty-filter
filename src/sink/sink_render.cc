@@ -41,7 +41,7 @@ void SinkRender::Init() {
   tex_coord_attribute_location_ =
       display_program_->GetAttribLocation("inputTextureCoordinate");
   color_map_uniform_location_ =
-      display_program_->GetUniformLocation("textureCoordinate");
+      display_program_->GetUniformLocation("inputImageTexture");
   GPUPixelContext::GetInstance()->SetActiveGlProgram(display_program_);
   CHECK_GL(glEnableVertexAttribArray(position_attribute_location_));
   CHECK_GL(glEnableVertexAttribArray(tex_coord_attribute_location_));
@@ -154,8 +154,10 @@ void SinkRender::UpdateDisplayVertices() {
     scaled_width = inset_framebuffer_width / view_width_;
     scaled_height = inset_framebuffer_height / view_height_;
   } else if (fill_mode_ == FillMode::PreserveAspectRatioAndFill) {
-    scaled_width = view_width_ / inset_framebuffer_height;
-    scaled_height = view_height_ / inset_framebuffer_width;
+    float fitted_width_scale = inset_framebuffer_width / view_width_;
+    float fitted_height_scale = inset_framebuffer_height / view_height_;
+    scaled_width = fitted_width_scale > 0.0f ? 1.0f / fitted_width_scale : 1.0f;
+    scaled_height = fitted_height_scale > 0.0f ? 1.0f / fitted_height_scale : 1.0f;
   }
 
   display_vertices_[0] = -scaled_width;

@@ -9,6 +9,9 @@
 #include "core/gpupixel_program.h"
 
 class DispatchQueue;
+#if defined(GPUPIXEL_ANDROID)
+struct ANativeWindow;
+#endif
 
 namespace gpupixel {
 
@@ -35,6 +38,10 @@ class GPUPIXEL_API GPUPixelContext {
   EGLContext GetEglContext() const { return egl_context_; };
   EGLDisplay GetEglDisplay() const { return egl_display_; };
   EGLSurface GetEglSurface() const { return egl_surface_; };
+  bool SetWindowSurface(ANativeWindow* window);
+  void ClearWindowSurface();
+  bool UseWindowSurface();
+  void UsePbufferSurface();
 #elif defined(GPUPIXEL_WIN) || defined(GPUPIXEL_LINUX)
   GLFWwindow* GetGLContext() const { return gl_context_; };
 #endif
@@ -64,7 +71,9 @@ class GPUPIXEL_API GPUPixelContext {
   EGLDisplay egl_display_;
   EGLConfig egl_config_;
   EGLSurface egl_surface_;
+  EGLSurface egl_window_surface_;
   EGLContext egl_context_;
+  bool using_window_surface_ = false;
 #elif defined(GPUPIXEL_WIN) || defined(GPUPIXEL_LINUX)
   GLFWwindow* gl_context_;
 #elif defined(GPUPIXEL_WASM)

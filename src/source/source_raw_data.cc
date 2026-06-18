@@ -4,6 +4,32 @@
 
 namespace gpupixel {
 
+namespace {
+void UploadTexture2D(uint32_t texture,
+                     int texture_index,
+                     int width,
+                     int height,
+                     uint32_t format,
+                     const uint8_t* pixels,
+                     int* texture_widths,
+                     int* texture_heights,
+                     uint32_t* texture_formats) {
+  glBindTexture(GL_TEXTURE_2D, texture);
+  if (texture_widths[texture_index] != width ||
+      texture_heights[texture_index] != height ||
+      texture_formats[texture_index] != format) {
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format,
+                 GL_UNSIGNED_BYTE, pixels);
+    texture_widths[texture_index] = width;
+    texture_heights[texture_index] = height;
+    texture_formats[texture_index] = format;
+  } else {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, format,
+                    GL_UNSIGNED_BYTE, pixels);
+  }
+}
+}  // namespace
+
 const std::string kI420VertexShaderString = R"(
     attribute vec4 position; 
     attribute vec4 inputTextureCoordinate;
@@ -184,9 +210,9 @@ int SourceRawData::GenerateTextureWithI420(int width,
 
   for (int i = 0; i < 3; ++i) {
     glActiveTexture(GL_TEXTURE0 + i);
-    glBindTexture(GL_TEXTURE_2D, textures_[i]);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, widths[i], heights[i], 0,
-                 GL_LUMINANCE, GL_UNSIGNED_BYTE, pixels[i]);
+    UploadTexture2D(textures_[i], i, widths[i], heights[i], GL_LUMINANCE,
+                    pixels[i], texture_widths_, texture_heights_,
+                    texture_formats_);
   }
 
   filter_program_->SetUniformValue("texture_type", 0);
@@ -213,16 +239,16 @@ int SourceRawData::GenerateTextureWithPixels(const uint8_t* pixels,
 
   uint32_t texture = textures_[3];
 
-  CHECK_GL(glBindTexture(GL_TEXTURE_2D, texture));
-
   if (type == GPUPIXEL_FRAME_TYPE_BGRA) {
 #if defined(GPUPIXEL_IOS) || defined(GPUPIXEL_MAC)
-    CHECK_GL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, stride / 4, height, 0,
-                          GL_BGRA, GL_UNSIGNED_BYTE, pixels));
+    CHECK_GL(UploadTexture2D(texture, 3, stride / 4, height, GL_BGRA, pixels,
+                             texture_widths_, texture_heights_,
+                             texture_formats_));
 #endif
   } else if (type == GPUPIXEL_FRAME_TYPE_RGBA) {
-    CHECK_GL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, stride / 4, height, 0,
-                          GL_RGBA, GL_UNSIGNED_BYTE, pixels));
+    CHECK_GL(UploadTexture2D(texture, 3, stride / 4, height, GL_RGBA, pixels,
+                             texture_widths_, texture_heights_,
+                             texture_formats_));
   }
 
   GPUPixelContext::GetInstance()->SetActiveGlProgram(filter_program_);

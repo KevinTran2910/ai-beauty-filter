@@ -46,6 +46,9 @@ class GPUPIXEL_API SourceRawData : public Filter {
   uint32_t filter_tex_coord_attribute_;
 
   uint32_t textures_[4] = {0};
+  int texture_widths_[4] = {0};
+  int texture_heights_[4] = {0};
+  uint32_t texture_formats_[4] = {0};
   RotationMode rotation_ = NoRotation;
   std::shared_ptr<GPUPixelFramebuffer> framebuffer_;
 };
