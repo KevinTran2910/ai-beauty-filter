@@ -51,8 +51,14 @@ public final class BeautyFilterNative {
 
     private static native void nativeClearOutputSurface();
 
-    private static native boolean nativeProcessPreview(
-            ByteBuffer inRgba, int width, int height, int rotationDegrees, boolean mirror);
+    private static native boolean nativeProcessPreviewYuv(
+            ByteBuffer y, ByteBuffer u, ByteBuffer v, int width, int height,
+            int yStride, int uStride, int vStride, int uvPixelStride, int rotationMode);
+
+    private static native boolean nativeProcessIntoYuv(
+            ByteBuffer y, ByteBuffer u, ByteBuffer v, int width, int height,
+            int yStride, int uStride, int vStride, int uvPixelStride, int rotationMode,
+            ByteBuffer outRgba);
 
     private static native float[] nativeGetPerfStats();
 
@@ -123,10 +129,31 @@ public final class BeautyFilterNative {
         nativeClearOutputSurface();
     }
 
-    /** Render one RGBA frame directly to the attached output surface. */
-    public static boolean processPreview(
-            ByteBuffer inRgba, int width, int height, int rotationDegrees, boolean mirror) {
-        return nativeProcessPreview(inRgba, width, height, rotationDegrees, mirror);
+    /**
+     * Render one camera YUV_420_888 frame directly to the output surface. The
+     * planes are uploaded to the GPU (YUV-&gt;RGB happens in the shader) and the
+     * frame is rotated/mirrored upright on the GPU via {@code rotationMode} (a
+     * gpupixel RotationMode ordinal). No CPU color conversion. {@code width}/
+     * {@code height} are the raw (un-rotated) camera dimensions and must be even.
+     */
+    public static boolean processPreviewYuv(
+            ByteBuffer y, ByteBuffer u, ByteBuffer v, int width, int height,
+            int yStride, int uStride, int vStride, int uvPixelStride, int rotationMode) {
+        return nativeProcessPreviewYuv(y, u, v, width, height,
+                yStride, uStride, vStride, uvPixelStride, rotationMode);
+    }
+
+    /**
+     * Capture variant of {@link #processPreviewYuv}: renders off-screen and reads
+     * the filtered, upright RGBA result back into {@code outRgba}, which must be a
+     * direct buffer of at least rotatedWidth*rotatedHeight*4 bytes.
+     */
+    public static boolean processIntoYuv(
+            ByteBuffer y, ByteBuffer u, ByteBuffer v, int width, int height,
+            int yStride, int uStride, int vStride, int uvPixelStride, int rotationMode,
+            ByteBuffer outRgba) {
+        return nativeProcessIntoYuv(y, u, v, width, height,
+                yStride, uStride, vStride, uvPixelStride, rotationMode, outRgba);
     }
 
     /**

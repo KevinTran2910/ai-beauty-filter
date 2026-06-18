@@ -173,11 +173,16 @@ int SourceRawData::GenerateTextureWithI420(int width,
                                            int strideU,
                                            const uint8_t* dataV,
                                            int strideV) {
-  if (!framebuffer_ || (framebuffer_->GetWidth() != width ||
-                        framebuffer_->GetHeight() != height)) {
+  // Output dims swap for 90/270 rotations so the rotated image keeps its aspect
+  // ratio; the rest of the chain then sees an already-upright framebuffer.
+  bool swap = rotationSwapsSize(rotation_);
+  int fb_width = swap ? height : width;
+  int fb_height = swap ? width : height;
+  if (!framebuffer_ || (framebuffer_->GetWidth() != fb_width ||
+                        framebuffer_->GetHeight() != fb_height)) {
     framebuffer_ = GPUPixelContext::GetInstance()
                        ->GetFramebufferFactory()
-                       ->CreateFramebuffer(width, height);
+                       ->CreateFramebuffer(fb_width, fb_height);
   }
 
   this->SetFramebuffer(framebuffer_, NoRotation);

@@ -123,19 +123,16 @@ public class MainActivity extends AppCompatActivity {
     private long frameCount;
     private final PerfStats perfStats = new PerfStats();
 
-    // Frame ingest (camera) — reused across frames, recreated only on size change.
-    private Bitmap paddedBitmap;       // receives the CameraX RGBA buffer (may be padded)
-    private Bitmap uprightBitmap;      // rotated/mirrored upright frame
-    private Canvas uprightCanvas;
-    private final Matrix frameMatrix = new Matrix();
-
     // Native I/O — direct buffers so the JNI reads/writes without copies or allocs.
+    // Used by the image-mode (RGBA) path and the camera capture (YUV readback) path.
     private ByteBuffer inBuffer;
     private ByteBuffer outBuffer;
     private Bitmap resultBitmap;
 
     // Detection downscale — reused.
-    private Bitmap detectBitmap;
+    private Bitmap detectSrcBitmap;    // grayscale camera-orientation downscale (from Y plane)
+    private int[] detectSrcPixels;
+    private Bitmap detectBitmap;       // upright (+mirrored) detection input
     private Canvas detectCanvas;
     private ByteBuffer detectBuffer;
     private final Matrix detectMatrix = new Matrix();
@@ -363,8 +360,11 @@ public class MainActivity extends AppCompatActivity {
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
                 .build();
 
+        // YUV_420_888 is the camera's native format: no internal YUV->RGBA
+        // conversion (that conversion was the per-frame delivery bottleneck). The
+        // planes are uploaded straight to the GPU, which does YUV->RGB in-shader.
         ImageAnalysis.Builder analysisBuilder = new ImageAnalysis.Builder()
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setResolutionSelector(resolution);
 
@@ -464,36 +464,39 @@ public class MainActivity extends AppCompatActivity {
     /** CameraX analyzer callback. Runs on cameraExecutor. */
     private void analyze(@NonNull ImageProxy image) {
         long frameStartNs = System.nanoTime();
-        float uprightMs = 0f;
         float detectMs = 0f;
         try {
             if (imageMode) {
                 return;
             }
-            perfStats.setCameraSize(image.getWidth(), image.getHeight());
-            long uprightStartNs = System.nanoTime();
-            Bitmap upright = buildUpright(image);
-            uprightMs = elapsedMs(uprightStartNs);
-            perfStats.setProcessedSize(upright.getWidth(), upright.getHeight());
-            Bitmap toDraw = upright;
+            int camW = image.getWidth();
+            int camH = image.getHeight();
+            perfStats.setCameraSize(camW, camH);
+            int rotationDegrees = image.getImageInfo().getRotationDegrees();
+            boolean swap = (rotationDegrees == 90 || rotationDegrees == 270);
+            int upW = swap ? camH : camW;   // upright (post-rotation) dimensions
+            int upH = swap ? camW : camH;
+            perfStats.setProcessedSize(upW, upH);
+
             if (initialized) {
+                int rotationMode = rotationModeFor(rotationDegrees, frontCamera);
                 boolean doDetect = (frameCount % DETECT_EVERY == 0);
-                if (captureRequested) {
-                    FrameResult filteredResult = processFrame(upright, doDetect);
-                    detectMs = filteredResult.detectMs;
-                    Bitmap filtered = filteredResult.bitmap;
-                    if (filtered != null) {
-                        toDraw = filtered;
-                    }
-                    deliver(toDraw);
-                } else {
-                    detectMs = processPreviewFrame(upright, doDetect);
+                if (doDetect) {
+                    detectMs = runDetectYuv(image, rotationDegrees, frontCamera);
                 }
-            } else {
-                deliver(toDraw);
+                if (captureRequested) {
+                    Bitmap filtered = processCaptureYuv(image, rotationMode, upW, upH);
+                    if (filtered != null) {
+                        deliver(filtered);
+                    }
+                } else {
+                    processPreviewYuv(image, rotationMode);
+                }
+                perfStats.pullNativeStats();
             }
             frameCount++;
-            perfStats.setTimings(elapsedMs(frameStartNs), uprightMs, detectMs);
+            // Upright time is now 0 — rotation/conversion moved off the CPU to the GPU.
+            perfStats.setTimings(elapsedMs(frameStartNs), 0f, detectMs);
             perfStats.onFrameComplete();
         } catch (Throwable t) {
             Log.e(TAG, "analyze failed", t);
@@ -502,48 +505,129 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** Draws a CameraX RGBA frame into the reused, upright (selfie-mirrored) bitmap. */
-    private Bitmap buildUpright(ImageProxy image) {
-        ImageProxy.PlaneProxy plane = image.getPlanes()[0];
-        ByteBuffer buffer = plane.getBuffer();
-        buffer.rewind();
-        int pixelStride = plane.getPixelStride();
-        int rowStride = plane.getRowStride();
-        int w = image.getWidth();
-        int h = image.getHeight();
-        int rowPadding = rowStride - pixelStride * w;
-        int paddedW = w + rowPadding / pixelStride;
+    // gpupixel RotationMode ordinals (see include/gpupixel/sink/sink.h). Rotation
+    // is applied on the GPU; the selfie mirror is folded in here too. THIS TABLE
+    // is the single place to adjust if the live preview shows up rotated or
+    // mirror-flipped wrong — it's a Java-only change (no NDK rebuild needed).
+    private static final int ROT_NONE = 0;          // NoRotation
+    private static final int ROT_LEFT = 1;          // RotateLeft
+    private static final int ROT_RIGHT = 2;         // RotateRight
+    private static final int ROT_FLIP_V = 3;        // FlipVertical
+    private static final int ROT_FLIP_H = 4;        // FlipHorizontal
+    private static final int ROT_RIGHT_FLIP_V = 5;  // RotateRightFlipVertical
+    private static final int ROT_RIGHT_FLIP_H = 6;  // RotateRightFlipHorizontal
+    private static final int ROT_180 = 7;           // Rotate180
 
-        if (paddedBitmap == null || paddedBitmap.getWidth() != paddedW
-                || paddedBitmap.getHeight() != h) {
-            paddedBitmap = Bitmap.createBitmap(paddedW, h, Bitmap.Config.ARGB_8888);
+    private static int rotationModeFor(int rotationDegrees, boolean mirror) {
+        // NOTE: includes a +180° correction over the naive mapping — the GPU
+        // sampling convention is rotated 180° from the camera's reported degrees,
+        // so each entry is its 180°-composed equivalent.
+        if (!mirror) {
+            switch (rotationDegrees) {
+                case 90:  return ROT_LEFT;
+                case 180: return ROT_NONE;
+                case 270: return ROT_RIGHT;
+                default:  return ROT_180;   // 0°
+            }
         }
-        paddedBitmap.copyPixelsFromBuffer(buffer);
-        // Padding is 0 on virtually all devices for RGBA; only then allocate a crop.
-        Bitmap src = (rowPadding == 0)
-                ? paddedBitmap : Bitmap.createBitmap(paddedBitmap, 0, 0, w, h);
+        switch (rotationDegrees) {
+            case 90:  return ROT_RIGHT_FLIP_V;
+            case 180: return ROT_FLIP_H;
+            case 270: return ROT_RIGHT_FLIP_H;
+            default:  return ROT_FLIP_V;    // 0°
+        }
+    }
 
-        int rotation = image.getImageInfo().getRotationDegrees();
-        boolean swap = (rotation == 90 || rotation == 270);
-        int uw = swap ? h : w;
-        int uh = swap ? w : h;
-        ensureUpright(uw, uh);
+    /** Uploads the camera YUV planes and renders directly to the surface. */
+    private void processPreviewYuv(ImageProxy image, int rotationMode) {
+        if (!previewSurfaceReady) {
+            return;
+        }
+        ImageProxy.PlaneProxy[] p = image.getPlanes();
+        BeautyFilterNative.processPreviewYuv(
+                p[0].getBuffer(), p[1].getBuffer(), p[2].getBuffer(),
+                image.getWidth(), image.getHeight(),
+                p[0].getRowStride(), p[1].getRowStride(), p[2].getRowStride(),
+                p[1].getPixelStride(), rotationMode);
+    }
 
-        // Map the w x h source rect upright, then mirror horizontally for selfie.
-        frameMatrix.reset();
-        frameMatrix.postRotate(rotation);
-        switch (rotation) {
-            case 90:  frameMatrix.postTranslate(h, 0); break;
-            case 180: frameMatrix.postTranslate(w, h); break;
-            case 270: frameMatrix.postTranslate(0, w); break;
+    /** Capture: render off-screen, read the upright RGBA result into resultBitmap. */
+    private Bitmap processCaptureYuv(ImageProxy image, int rotationMode, int upW, int upH) {
+        ensureProcessBuffers(upW, upH);
+        ImageProxy.PlaneProxy[] p = image.getPlanes();
+        outBuffer.rewind();
+        if (!BeautyFilterNative.processIntoYuv(
+                p[0].getBuffer(), p[1].getBuffer(), p[2].getBuffer(),
+                image.getWidth(), image.getHeight(),
+                p[0].getRowStride(), p[1].getRowStride(), p[2].getRowStride(),
+                p[1].getPixelStride(), rotationMode, outBuffer)) {
+            Log.e(TAG, "processIntoYuv failed");
+            return null;
+        }
+        outBuffer.rewind();
+        resultBitmap.copyPixelsFromBuffer(outBuffer);
+        return resultBitmap;
+    }
+
+    /**
+     * Face detection on a small, upright (selfie-mirrored) grayscale image built
+     * from the camera Y (luma) plane. Mirrors the orientation the GPU produces so
+     * the normalized landmarks line up with the rendered frame. The rotation here
+     * uses Android's Matrix (the same math the app used previously), so it is
+     * independent of the GPU RotationMode table.
+     */
+    private float runDetectYuv(ImageProxy image, int rotationDegrees, boolean mirror) {
+        long detectStartNs = System.nanoTime();
+        ImageProxy.PlaneProxy yPlane = image.getPlanes()[0];
+        ByteBuffer yBuf = yPlane.getBuffer();
+        int yRowStride = yPlane.getRowStride();
+        int yPixelStride = yPlane.getPixelStride();
+        int camW = image.getWidth();
+        int camH = image.getHeight();
+
+        int longest = Math.max(camW, camH);
+        float scale = longest > DETECT_MAX_DIM ? (float) DETECT_MAX_DIM / longest : 1f;
+        int cdw = Math.max(1, Math.round(camW * scale));
+        int cdh = Math.max(1, Math.round(camH * scale));
+        ensureDetectSrc(cdw, cdh);
+
+        // Downscale the Y plane into a gray ARGB buffer (camera orientation).
+        for (int j = 0; j < cdh; j++) {
+            int sy = Math.min(camH - 1, Math.round(j / scale));
+            int rowBase = sy * yRowStride;
+            int outBase = j * cdw;
+            for (int i = 0; i < cdw; i++) {
+                int sx = Math.min(camW - 1, Math.round(i / scale));
+                int yv = yBuf.get(rowBase + sx * yPixelStride) & 0xFF;
+                detectSrcPixels[outBase + i] = 0xFF000000 | (yv << 16) | (yv << 8) | yv;
+            }
+        }
+        detectSrcBitmap.setPixels(detectSrcPixels, 0, cdw, 0, 0, cdw, cdh);
+
+        boolean swap = (rotationDegrees == 90 || rotationDegrees == 270);
+        int dw = swap ? cdh : cdw;
+        int dh = swap ? cdw : cdh;
+        ensureDetectBuffers(dw, dh);
+
+        detectMatrix.reset();
+        detectMatrix.postRotate(rotationDegrees);
+        switch (rotationDegrees) {
+            case 90:  detectMatrix.postTranslate(cdh, 0); break;
+            case 180: detectMatrix.postTranslate(cdw, cdh); break;
+            case 270: detectMatrix.postTranslate(0, cdw); break;
             default:  break;
         }
-        if (frontCamera) {
-            frameMatrix.postScale(-1f, 1f);
-            frameMatrix.postTranslate(uw, 0);
+        if (mirror) {
+            detectMatrix.postScale(-1f, 1f);
+            detectMatrix.postTranslate(dw, 0);
         }
-        uprightCanvas.drawBitmap(src, frameMatrix, drawPaint);
-        return uprightBitmap;
+        detectCanvas.drawColor(Color.BLACK);
+        detectCanvas.drawBitmap(detectSrcBitmap, detectMatrix, drawPaint);
+
+        detectBuffer.rewind();
+        detectBitmap.copyPixelsToBuffer(detectBuffer);
+        BeautyFilterNative.detectFace(detectBuffer, dw, dh);
+        return elapsedMs(detectStartNs);
     }
 
     private static final class FrameResult {
@@ -582,32 +666,6 @@ public class MainActivity extends AppCompatActivity {
         return new FrameResult(resultBitmap, detectMs);
     }
 
-    /** Detects optionally, then renders the filtered frame directly to the native surface. */
-    private float processPreviewFrame(Bitmap upright, boolean doDetect) {
-        if (!previewSurfaceReady) {
-            return 0f;
-        }
-        int w = upright.getWidth();
-        int h = upright.getHeight();
-        ensureProcessBuffers(w, h);
-
-        float detectMs = 0f;
-        if (doDetect) {
-            long detectStartNs = System.nanoTime();
-            runDetect(upright);
-            detectMs = elapsedMs(detectStartNs);
-        }
-
-        inBuffer.rewind();
-        upright.copyPixelsToBuffer(inBuffer);
-        inBuffer.rewind();
-        if (!BeautyFilterNative.processPreview(inBuffer, w, h, 0, false)) {
-            Log.e(TAG, "processPreview failed");
-        }
-        perfStats.pullNativeStats();
-        return detectMs;
-    }
-
     /** Runs face detection on a downscaled copy of {@code upright}. */
     private void runDetect(Bitmap upright) {
         int w = upright.getWidth();
@@ -625,14 +683,6 @@ public class MainActivity extends AppCompatActivity {
         detectBuffer.rewind();
         detectBitmap.copyPixelsToBuffer(detectBuffer);
         BeautyFilterNative.detectFace(detectBuffer, dw, dh);
-    }
-
-    private void ensureUpright(int uw, int uh) {
-        if (uprightBitmap == null || uprightBitmap.getWidth() != uw
-                || uprightBitmap.getHeight() != uh) {
-            uprightBitmap = Bitmap.createBitmap(uw, uh, Bitmap.Config.ARGB_8888);
-            uprightCanvas = new Canvas(uprightBitmap);
-        }
     }
 
     private void ensureProcessBuffers(int w, int h) {
@@ -653,6 +703,15 @@ public class MainActivity extends AppCompatActivity {
             detectBitmap = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888);
             detectCanvas = new Canvas(detectBitmap);
             detectBuffer = ByteBuffer.allocateDirect(dw * dh * 4);
+        }
+    }
+
+    /** Reused source bitmap/pixel array for the grayscale detection downscale. */
+    private void ensureDetectSrc(int cdw, int cdh) {
+        if (detectSrcBitmap == null || detectSrcBitmap.getWidth() != cdw
+                || detectSrcBitmap.getHeight() != cdh) {
+            detectSrcBitmap = Bitmap.createBitmap(cdw, cdh, Bitmap.Config.ARGB_8888);
+            detectSrcPixels = new int[cdw * cdh];
         }
     }
 

@@ -30,6 +30,7 @@
 #include "android/jni/jni_helpers.h"
 #include "core/gpupixel_context.h"
 #include "gpupixel/gpupixel.h"
+#include "libyuv.h"
 
 #ifdef GPUPIXEL_ENABLE_FACE_DETECTOR
 #include "gpupixel/face_detector/face_detector.h"
@@ -56,9 +57,62 @@ float g_last_preview_ms = 0.0f;
 float g_last_readback_ms = 0.0f;
 std::mutex g_mutex;
 
+// Reused staging buffer for the tightly-packed I420 produced from the camera's
+// YUV_420_888 planes (no per-frame allocation in steady state).
+std::vector<uint8_t> g_i420_staging;
+
 float ElapsedMs(std::chrono::steady_clock::time_point start,
                 std::chrono::steady_clock::time_point end) {
   return std::chrono::duration<float, std::milli>(end - start).count();
+}
+
+// Repacks CameraX YUV_420_888 planes (which may be planar or semi-planar and
+// have row padding) into a contiguous, tightly-packed I420 buffer using libyuv.
+// Returns a pointer into g_i420_staging via `out_data`, or false on failure.
+// `width`/`height` must be even (true for camera frames).
+bool RepackToI420(JNIEnv* env,
+                  jobject y,
+                  jobject u,
+                  jobject v,
+                  int width,
+                  int height,
+                  int y_stride,
+                  int u_stride,
+                  int v_stride,
+                  int uv_pixel_stride,
+                  const uint8_t** out_data) {
+  if (width <= 0 || height <= 0 || (width & 1) || (height & 1) || y == nullptr ||
+      u == nullptr || v == nullptr) {
+    return false;
+  }
+  const uint8_t* src_y =
+      reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(y));
+  const uint8_t* src_u =
+      reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(u));
+  const uint8_t* src_v =
+      reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(v));
+  if (src_y == nullptr || src_u == nullptr || src_v == nullptr) {
+    GPUPIXEL_JNI_LOGE("RepackToI420: planes must be direct ByteBuffers");
+    return false;
+  }
+  const int cw = width / 2;
+  const int ch = height / 2;
+  const size_t needed =
+      static_cast<size_t>(width) * height + static_cast<size_t>(2) * cw * ch;
+  if (g_i420_staging.size() < needed) {
+    g_i420_staging.resize(needed);
+  }
+  uint8_t* dst_y = g_i420_staging.data();
+  uint8_t* dst_u = dst_y + static_cast<size_t>(width) * height;
+  uint8_t* dst_v = dst_u + static_cast<size_t>(cw) * ch;
+  if (libyuv::Android420ToI420(src_y, y_stride, src_u, u_stride, src_v, v_stride,
+                               uv_pixel_stride, dst_y, width, dst_u, cw, dst_v,
+                               cw, width, height) != 0) {
+    GPUPIXEL_JNI_LOGE("RepackToI420: Android420ToI420 failed");
+    return false;
+  }
+  *out_data = dst_y;
+  return true;
 }
 
 std::shared_ptr<Source> PipelineTerminal() {
@@ -279,6 +333,7 @@ Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeProcessInto(
   // Synchronous: ProcessData blocks on the GL worker thread, so the sink buffer
   // is ready immediately after it returns.
   auto native_start = std::chrono::steady_clock::now();
+  g_source->SetRotation(NoRotation);  // RGBA path is pre-oriented by the caller
   g_source->ProcessData(in, width, height, width * 4, GPUPIXEL_FRAME_TYPE_RGBA);
 
   const uint8_t* result = g_sink->GetRgbaBuffer();
@@ -354,44 +409,100 @@ Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeClearOutputSurface(
   g_surface_height = 0;
 }
 
+// Renders one camera YUV_420_888 frame directly to the output surface. The YUV
+// planes are uploaded to the GPU (the source shader does YUV->RGB), and rotation
+// + mirror are applied on the GPU via `rotation_mode` (a gpupixel::RotationMode
+// ordinal that bakes in both the upright rotation and the selfie mirror). No CPU
+// color conversion or bitmap work.
 JNIEXPORT jboolean JNICALL
-Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeProcessPreview(
+Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeProcessPreviewYuv(
     JNIEnv* env,
     jclass /*clazz*/,
-    jobject in_rgba,
+    jobject y,
+    jobject u,
+    jobject v,
     jint width,
     jint height,
-    jint /*rotation_degrees*/,
-    jboolean mirror) {
+    jint y_stride,
+    jint u_stride,
+    jint v_stride,
+    jint uv_pixel_stride,
+    jint rotation_mode) {
   std::lock_guard<std::mutex> lock(g_mutex);
-  if (!g_initialized || in_rgba == nullptr || width <= 0 || height <= 0 ||
-      g_surface_width <= 0 || g_surface_height <= 0) {
+  if (!g_initialized || g_surface_width <= 0 || g_surface_height <= 0) {
     return JNI_FALSE;
   }
-  const uint8_t* in =
-      reinterpret_cast<const uint8_t*>(env->GetDirectBufferAddress(in_rgba));
-  if (in == nullptr) {
-    GPUPIXEL_JNI_LOGE("nativeProcessPreview: arg must be a direct ByteBuffer");
-    return JNI_FALSE;
-  }
-  if (env->GetDirectBufferCapacity(in_rgba) <
-      static_cast<jlong>(width) * height * 4) {
+  const uint8_t* i420 = nullptr;
+  if (!RepackToI420(env, y, u, v, width, height, y_stride, u_stride, v_stride,
+                    uv_pixel_stride, &i420)) {
     return JNI_FALSE;
   }
   if (!EnsureRenderSinkAttached()) {
     return JNI_FALSE;
   }
-  g_render->SetMirror(mirror == JNI_TRUE);
+  g_render->SetMirror(false);  // mirror is baked into rotation_mode
   if (!GPUPixelContext::GetInstance()->UseWindowSurface()) {
     return JNI_FALSE;
   }
   auto native_start = std::chrono::steady_clock::now();
-  g_source->SetRotation(NoRotation);
-  g_source->ProcessData(in, width, height, width * 4, GPUPIXEL_FRAME_TYPE_RGBA);
+  g_source->SetRotation(static_cast<RotationMode>(rotation_mode));
+  g_source->ProcessData(i420, width, height, width, GPUPIXEL_FRAME_TYPE_YUVI420);
   GPUPixelContext::GetInstance()->SyncRunWithContext(
       [] { GPUPixelContext::GetInstance()->PresentBufferForDisplay(); });
-  g_last_preview_ms =
-      ElapsedMs(native_start, std::chrono::steady_clock::now());
+  g_last_preview_ms = ElapsedMs(native_start, std::chrono::steady_clock::now());
+  return JNI_TRUE;
+}
+
+// Same upload + GPU rotation as nativeProcessPreviewYuv, but renders off-screen
+// and reads the filtered, upright RGBA result back into `out_rgba` (capture path).
+// `out_rgba` must be a direct ByteBuffer of at least rotatedWidth*rotatedHeight*4.
+JNIEXPORT jboolean JNICALL
+Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeProcessIntoYuv(
+    JNIEnv* env,
+    jclass /*clazz*/,
+    jobject y,
+    jobject u,
+    jobject v,
+    jint width,
+    jint height,
+    jint y_stride,
+    jint u_stride,
+    jint v_stride,
+    jint uv_pixel_stride,
+    jint rotation_mode,
+    jobject out_rgba) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!g_initialized || out_rgba == nullptr) {
+    return JNI_FALSE;
+  }
+  const uint8_t* i420 = nullptr;
+  if (!RepackToI420(env, y, u, v, width, height, y_stride, u_stride, v_stride,
+                    uv_pixel_stride, &i420)) {
+    return JNI_FALSE;
+  }
+  uint8_t* out =
+      reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(out_rgba));
+  if (out == nullptr) {
+    GPUPIXEL_JNI_LOGE("nativeProcessIntoYuv: out must be a direct ByteBuffer");
+    return JNI_FALSE;
+  }
+  GPUPixelContext::GetInstance()->UsePbufferSurface();
+  EnsureRawSinkAttached();
+  g_source->SetRotation(static_cast<RotationMode>(rotation_mode));
+  g_source->ProcessData(i420, width, height, width, GPUPIXEL_FRAME_TYPE_YUVI420);
+
+  const uint8_t* result = g_sink->GetRgbaBuffer();
+  if (result == nullptr) {
+    return JNI_FALSE;
+  }
+  const jlong out_size =
+      static_cast<jlong>(g_sink->GetWidth()) * g_sink->GetHeight() * 4;
+  if (env->GetDirectBufferCapacity(out_rgba) < out_size) {
+    GPUPIXEL_JNI_LOGE("nativeProcessIntoYuv: out buffer too small (need %lld)",
+                      static_cast<long long>(out_size));
+    return JNI_FALSE;
+  }
+  std::memcpy(out, result, static_cast<size_t>(out_size));
   return JNI_TRUE;
 }
 
