@@ -1,248 +1,205 @@
-# Extending Filters — Thêm Filter Mới
+# Extending Filters
 
-## Pattern Tổng Quát
+Pipeline Android được wire trong `src/android/jni/jni_bridge.cc`. Pattern thêm filter mới:
 
-Pipeline là directed graph kiểu `AddSink`. Thêm node mới = implement filter class C++ → wire vào graph trong `jni_bridge.cc` → expose setter qua JNI nếu cần.
+1. Tạo hoặc bật class filter C++.
+2. Đảm bảo `.cc` và header có trong `src/CMakeLists.txt`.
+3. Tạo global shared pointer trong JNI bridge.
+4. Wire filter vào graph trong `nativeInit`.
+5. Push landmarks nếu filter cần face mesh.
+6. Expose setter qua `BeautyFilterNative.java` nếu cần UI control.
+7. Reset pointer trong `nativeDestroy`.
 
----
+## Pipeline Hiện Tại
 
-## Ví Dụ: Thêm LipstickFilter
+Với face detector ON:
 
-`mouth.png` đã có trong assets và `LipstickFilter` đã tồn tại trong source/CMake, nhưng Android pipeline chưa wire filter này trong `jni_bridge.cc`. Đây là cách kích hoạt hoặc tùy biến.
-
-### Bước 1: Kiểm tra filter class C++
-
-Các file hiện đã có:
-
-- `include/gpupixel/filter/lipstick_filter.h`
-- `src/filter/lipstick_filter.cc`
-
-Nếu cần viết lại hoặc tạo filter tương tự, dùng pattern dưới đây.
-
-**File:** `src/filter/lipstick_filter.h`
-
-```cpp
-#pragma once
-
-#include "gpupixel/filter/face_makeup_filter.h"
-
-namespace gpupixel {
-class GPUPIXEL_API LipstickFilter : public FaceMakeupFilter {
- public:
-  static std::shared_ptr<LipstickFilter> Create();
-  bool Init() override;
-
- private:
-  LipstickFilter();
-};
-}  // namespace gpupixel
+```text
+g_source -> g_blusher -> g_reshape -> g_beauty -> dynamic sink
 ```
 
-**File:** `src/filter/lipstick_filter.cc`
+Sink không nên attach cứng trong `nativeInit`. JNI bridge đang switch sink theo path:
+
+- `EnsureRenderSinkAttached()` cho preview realtime (`SinkRender`).
+- `EnsureRawSinkAttached()` cho capture/image mode (`SinkRawData`).
+
+Vì vậy filter mới nên nằm trước terminal `g_beauty`, hoặc cần sửa `PipelineTerminal()` nếu terminal thay đổi.
+
+## Ví Dụ: Bật LipstickFilter
+
+`LipstickFilter` đã có sẵn:
+
+```text
+include/gpupixel/filter/lipstick_filter.h
+src/filter/lipstick_filter.cc
+src/res/mouth.png
+app/src/main/assets/res/mouth.png
+```
+
+`src/CMakeLists.txt` cũng đã include `lipstick_filter.cc` và header, nên chỉ cần wire vào Android JNI pipeline.
+
+### 1. Thêm State Trong JNI Bridge
 
 ```cpp
-bool LipstickFilter::Init() {
-  auto mouth = SourceImage::Create(Util::GetResourcePath("res/mouth.png"));
-  SetImageTexture(mouth);
-  SetTextureBounds(FrameBounds{502.5, 710, 262.5, 167.5});
-  return FaceMakeupFilter::Init();
+std::shared_ptr<LipstickFilter> g_lipstick;
+```
+
+Nếu `gpupixel/gpupixel.h` chưa export header này trong build hiện tại, include trực tiếp:
+
+```cpp
+#include "gpupixel/filter/lipstick_filter.h"
+```
+
+### 2. Tạo Filter Trong `nativeInit`
+
+```cpp
+g_lipstick = LipstickFilter::Create();
+```
+
+Nên validate cùng nhóm landmark filters:
+
+```cpp
+if (!g_source || !g_sink || !g_beauty || !g_reshape || !g_blusher || !g_lipstick) {
+  return -1;
 }
 ```
 
-### Bước 2: Xác nhận CMakeLists.txt
+### 3. Wire Graph
 
-```cmake
-# src/CMakeLists.txt hiện đã include:
-${CMAKE_CURRENT_SOURCE_DIR}/filter/lipstick_filter.cc
-${PROJECT_SOURCE_DIR}/include/gpupixel/filter/lipstick_filter.h
-```
-
-### Bước 3: Wire vào pipeline trong `jni_bridge.cc`
+Thay graph detector ON:
 
 ```cpp
-// src/android/jni/jni_bridge.cc
-
-// Thêm global
-static std::shared_ptr<LipstickFilter> g_lipstick;
-
-// Trong nativeInit():
-g_lipstick = LipstickFilter::Create();
-
-// Wire vào graph (sau BlusherFilter, trước FaceReshapeFilter):
 g_source->AddSink(g_blusher);
-g_blusher->AddSink(g_lipstick);   // ← thêm dòng này
-g_lipstick->AddSink(g_reshape);   // ← thay thế g_blusher->AddSink(g_reshape)
+g_blusher->AddSink(g_reshape);
 g_reshape->AddSink(g_beauty);
-g_beauty->AddSink(g_sink);
+```
 
-// Trong nativeDetectFace() — push landmarks:
+bằng:
+
+```cpp
+g_source->AddSink(g_blusher);
+g_blusher->AddSink(g_lipstick);
+g_lipstick->AddSink(g_reshape);
+g_reshape->AddSink(g_beauty);
+```
+
+Không thêm `g_beauty->AddSink(...)` ở đây; sink được attach động.
+
+### 4. Push Landmarks
+
+Trong `nativeDetectFace()`:
+
+```cpp
+if (g_blusher) g_blusher->SetFaceLandmarks(landmarks);
 if (g_lipstick) g_lipstick->SetFaceLandmarks(landmarks);
+if (g_reshape) g_reshape->SetFaceLandmarks(landmarks);
+```
 
-// Trong nativeDestroy():
+`LipstickFilter` kế thừa `FaceMakeupFilter`, nên cần landmark mesh đủ điểm như blusher.
+
+### 5. Expose Setter
+
+Trong `BeautyFilterNative.java`:
+
+```java
+private static native void nativeSetLipstickParams(float lipstick);
+
+public static void setLipstickParams(float lipstick) {
+    nativeSetLipstickParams(lipstick);
+}
+```
+
+Trong `jni_bridge.cc`:
+
+```cpp
+JNIEXPORT void JNICALL
+Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeSetLipstickParams(
+    JNIEnv* /*env*/,
+    jclass /*clazz*/,
+    jfloat lipstick) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!g_lipstick) {
+    return;
+  }
+  g_lipstick->SetBlendLevel(lipstick / 10.0f);
+}
+```
+
+### 6. Reset Trong `nativeDestroy`
+
+```cpp
 g_lipstick.reset();
 ```
 
-### Bước 4: Expose Java setter
+## Java UI Integration
 
-**Trong `BeautyFilterNative.java`:**
-
-```java
-private static native void nativeSetLipstickParams(float opacity);
-
-public static void setLipstickParams(float opacity) {
-    nativeSetLipstickParams(opacity);
-}
-```
-
-**Trong `jni_bridge.cc`:**
-
-```cpp
-extern "C" JNIEXPORT void JNICALL
-Java_com_aibeauty_beautyfilter_BeautyFilterNative_nativeSetLipstickParams(
-        JNIEnv* env, jclass clazz, jfloat opacity) {
-    if (g_lipstick) {
-        g_lipstick->SetBlendLevel(opacity / 10.0f);
-    }
-}
-```
-
-### Bước 5: Java caller — serialize trên cameraExecutor
+Đọc slider value trên UI thread, nhưng push native call qua `cameraExecutor`:
 
 ```java
-// Trong MainActivity.java
-lipstickSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+seekLipstick.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
     @Override
     public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-        cameraExecutor.execute(() ->
-            BeautyFilterNative.setLipstickParams((float) progress));
+        cameraExecutor.execute(() -> {
+            if (initialized) {
+                BeautyFilterNative.setLipstickParams(progress);
+            }
+        });
     }
-    // ...
+
+    @Override public void onStartTrackingTouch(SeekBar bar) {}
+    @Override public void onStopTrackingTouch(SeekBar bar) {}
 });
 ```
 
----
+Nếu app đang ở image mode, gọi lại `reprocessImage()` sau setter để refresh still output.
 
-## Viết Filter GLSL Mới (từ đầu)
+## Viết Filter Mới
 
-### Template Filter Class
+Filter đơn giản thường kế thừa `Filter`:
 
 ```cpp
-class MyCustomFilter : public Filter {
-public:
-    static std::shared_ptr<MyCustomFilter> Create() {
-        auto f = std::make_shared<MyCustomFilter>();
-        return f->Init() ? f : nullptr;
-    }
+class MyFilter : public Filter {
+ public:
+  static std::shared_ptr<MyFilter> Create();
+  bool Init() override;
+  void SetIntensity(float value);
 
-    bool Init() override {
-        // Vertex shader: standard pass-through
-        // Fragment shader: custom logic
-        if (!InitWithShaderString(kVertexShader, kFragmentShader)) return false;
-        // Lấy uniform locations
-        intensity_location_ = glGetUniformLocation(program_->GetProgram(), "intensity");
-        return true;
-    }
+ protected:
+  void OnRenderWithTexture(GPUPixelFramebuffer* input) override;
 
-    void SetIntensity(float v) { intensity_ = v; }
-
-protected:
-    void OnRenderWithTexture(GPUPixelFramebuffer* input) override {
-        glUniform1f(intensity_location_, intensity_);
-        // Filter::OnRenderWithTexture handle draw call
-        Filter::OnRenderWithTexture(input);
-    }
-
-private:
-    float intensity_ = 1.0f;
-    GLint intensity_location_ = -1;
-
-    static constexpr const char* kVertexShader = R"(
-        attribute vec4 position;
-        attribute vec2 inputTextureCoordinate;
-        varying vec2 textureCoordinate;
-        void main() {
-            gl_Position = position;
-            textureCoordinate = inputTextureCoordinate;
-        }
-    )";
-
-    static constexpr const char* kFragmentShader = R"(
-        precision mediump float;
-        varying vec2 textureCoordinate;
-        uniform sampler2D inputImageTexture;
-        uniform float intensity;
-        void main() {
-            vec4 color = texture2D(inputImageTexture, textureCoordinate);
-            // Custom logic here
-            gl_FragColor = mix(color, vec4(1.0 - color.rgb, color.a), intensity);
-        }
-    )";
+ private:
+  float intensity_ = 0.0f;
+  GLint intensity_location_ = -1;
 };
 ```
 
-### GLES3 vs Desktop GL Shader Variants
+Các bước chính:
 
-Nếu filter cần chạy cross-platform (WASM, Mac), cần viết 2 variants:
+- `InitWithShaderString(vertex, fragment)`.
+- Lấy uniform locations sau khi program init.
+- Trong `OnRenderWithTexture`, set uniform rồi gọi base render.
+- Nếu cần multi-pass hoặc multi-input, dùng `FilterGroup` như `BeautyFaceFilter`.
 
-```cpp
-// GLES3 (Android):
-"#version 300 es\n"
-"precision highp float;\n"
-"in vec2 textureCoordinate;\n"
-"out vec4 fragColor;\n"
-"uniform sampler2D inputImageTexture;\n"
-"void main() { fragColor = texture(inputImageTexture, textureCoordinate); }\n"
+## Shader Compatibility
 
-// Desktop GL (Mac/Linux):
-"#version 330\n"
-"in vec2 textureCoordinate;\n"
-"out vec4 fragColor;\n"
-"uniform sampler2D inputImageTexture;\n"
-"void main() { fragColor = texture(inputImageTexture, textureCoordinate); }\n"
-```
+Android dùng OpenGL ES 3. Nếu filter còn phải chạy cross-platform, kiểm tra các nhánh shader hiện có trong source:
 
-Xem `GPUPixelContext::IsOpenGLES()` để branch tại runtime, hoặc dùng preprocessor define từ CMake.
+- GLES/OpenGL ES shader syntax.
+- Desktop GL shader syntax.
+- WebGL/WASM fallback nếu cần.
 
----
+Giữ shader ở cùng pattern với các filter lân cận để tránh phá iOS/WASM build của GPUPixel.
 
-## FilterGroup — Kết Hợp Nhiều Filter
+## Checklist
 
-Khi filter cần xử lý qua nhiều pass hoặc cần nhiều texture inputs, dùng `FilterGroup`:
-
-```cpp
-class MyMultiPassFilter : public FilterGroup {
-public:
-    bool Init() override {
-        pass1_ = SomeFilter::Create();
-        pass2_ = AnotherFilter::Create();
-
-        // Wire internal graph
-        AddFilter(pass1_);
-        AddFilter(pass2_);
-        pass1_->AddSink(pass2_);
-
-        // Set input/output của group
-        SetTerminalFilter(pass2_);
-        return true;
-    }
-private:
-    std::shared_ptr<SomeFilter> pass1_;
-    std::shared_ptr<AnotherFilter> pass2_;
-};
-```
-
-Xem `beauty_face_filter.cc` cho ví dụ multi-input (3 textures vào 1 shader).
-
----
-
-## Checklist Khi Thêm Filter Mới
-
-- [ ] Implement class kế thừa `Filter` hoặc `FilterGroup`
-- [ ] Thêm `.cc` vào CMake sources list
-- [ ] Wire graph trong `nativeInit()` bằng `AddSink`
-- [ ] Reset trong `nativeDestroy()`
-- [ ] Nếu dùng landmark: gọi `SetFaceLandmarks()` trong `nativeDetectFace()`
-- [ ] Nếu expose param: thêm native method trong `BeautyFilterNative.java` + `jni_bridge.cc`
-- [ ] Gọi setter từ `cameraExecutor`, không phải UI thread
-- [ ] Test với face detection ON và OFF
-- [ ] Test khi không có mặt trong frame (filter phải pass-through)
+- [ ] Thêm class/header nếu filter chưa có.
+- [ ] Thêm source/header vào `src/CMakeLists.txt`.
+- [ ] Tạo global pointer trong `jni_bridge.cc`.
+- [ ] Tạo instance trong `nativeInit`.
+- [ ] Wire graph trước terminal filter.
+- [ ] Không attach sink cứng nếu dùng dynamic `SinkRender`/`SinkRawData`.
+- [ ] Push landmarks trong `nativeDetectFace` nếu cần.
+- [ ] Thêm setter Java + JNI nếu cần param runtime.
+- [ ] Reset pointer trong `nativeDestroy`.
+- [ ] Test preview realtime, capture, image mode.
+- [ ] Test frame không có mặt; filter landmark-driven phải pass-through.

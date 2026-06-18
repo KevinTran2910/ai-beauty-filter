@@ -1,218 +1,213 @@
-# Filter Pipeline — Chi Tiết
+# Filter Pipeline
 
-Pipeline C++ là một directed graph kiểu `Source → Filter... → Sink`. Mỗi node nhận texture input từ node trước, xử lý bằng GLSL shader, output ra FBO mới.
+Pipeline native là directed graph kiểu:
 
-## Pipeline Graph Đầy Đủ
-
-```
-SourceRawData (RGBA ByteBuffer → GL texture)
-      │
-      ▼
-BlusherFilter
-  └─ FaceMakeupFilter (base class)
-       ├─ Program 1: render base frame to FBO
-       └─ Program 2: draw blusher.png over landmark mesh
-      │
-      ▼
-FaceReshapeFilter
-  └─ GLSL vertex warp: 9 curveWarp + 2 enlargeEye
-      │
-      ▼
-BeautyFaceFilter (FilterGroup)
-  ├─ BilateralFilter
-  │    └─ BilateralMonoFilter (H pass) → BilateralMonoFilter (V pass)
-  ├─ BoxHighPassFilter
-  └─ BeautyFaceUnitFilter  ◄── nhận 3 textures: original, bilateral, highpass
-      │
-      ▼
-SinkRawData (glReadPixels → output ByteBuffer)
+```text
+Source -> Filter -> Filter -> ... -> Sink
 ```
 
----
+Mỗi filter nhận texture từ node trước, render shader ra framebuffer mới, rồi đẩy sang sink tiếp theo.
+
+## Graph Chính
+
+Khi `GPUPIXEL_ENABLE_FACE_DETECTOR=ON`:
+
+```text
+SourceRawData
+  -> BlusherFilter
+  -> FaceReshapeFilter
+  -> BeautyFaceFilter
+  -> SinkRender hoặc SinkRawData
+```
+
+Khi detector OFF:
+
+```text
+SourceRawData
+  -> BeautyFaceFilter
+  -> SinkRender hoặc SinkRawData
+```
+
+Terminal filter luôn là `BeautyFaceFilter`. JNI bridge attach một trong hai sink tùy path:
+
+- `SinkRender`: preview realtime lên `SurfaceView`.
+- `SinkRawData`: capture/image mode, readback RGBA về Java direct buffer.
 
 ## SourceRawData
 
 **File:** `src/source/source_raw_data.cc`
 
-Nhận RGBA hoặc I420 pixel data từ Java qua JNI, upload lên GL texture.
+Nhận frame từ JNI theo 2 format:
 
 ```cpp
-// Hai mode upload:
-source->ProcessData(buffer, width, height, stride, RGBA);  // direct RGBA
-source->ProcessData(buffer, width, height, stride, I420);  // YUV, convert trong shader
+GPUPIXEL_FRAME_TYPE_YUVI420
+GPUPIXEL_FRAME_TYPE_RGBA
 ```
 
-Không allocate texture mới mỗi frame — reuse texture nếu kích thước không đổi (`glTexSubImage2D`).
+YUV path:
 
----
+```text
+CameraX YUV_420_888
+-> libyuv Android420ToI420
+-> SourceRawData I420 upload
+-> shader YUV to RGB
+-> rotation/mirror bằng texture coordinates
+```
+
+RGBA path:
+
+```text
+Direct ByteBuffer RGBA
+-> SourceRawData RGBA upload
+-> optional rotation mode, app hiện dùng NoRotation
+```
+
+`SourceRawData` reuse GL texture/framebuffer khi kích thước không đổi.
 
 ## BlusherFilter
 
 **File:** `src/filter/blusher_filter.cc`  
 **Base:** `FaceMakeupFilter`  
-**Requires:** face landmarks
+**Requires:** landmarks hợp lệ
 
-Overlay `blusher.png` lên vùng má theo landmark. Texture region mặc định:
+Filter overlay `res/blusher.png` lên vùng má theo triangle mesh trong `FaceMakeupFilter`.
+
+Config hiện tại:
 
 ```cpp
-// {left, top, width, height} trong texture coordinates
 SetTextureBounds({395, 520, 489, 209});
+SetBlendLevel(blusher / 10.0f);
 ```
 
-Khi `has_face_ = false`, filter pass-through frame không thay đổi.
-
-**Blend mode:** multiply (mode 15) đang hardcoded trong `FaceMakeupFilter::DoRender()`. Shader có code cho normal/multiply/overlay/hard-light, nhưng chưa expose setter.
-
----
+Nếu không có face hoặc landmarks không đủ, filter pass-through.
 
 ## FaceReshapeFilter
 
 **File:** `src/filter/face_reshape_filter.cc`  
-**Requires:** face landmarks (106 điểm)
+**Requires:** khoảng 106 landmark points
 
-### Hai phép biến đổi
+Hai hiệu ứng chính:
 
-**1. thinFace — gầy mặt**
+- Face slim: nhiều phép `curveWarp` kéo vùng contour vào trong.
+- Eye enlarge: `enlargeEye` quanh 2 tâm mắt.
 
-9 `curveWarp` operations, mỗi cái kéo 1 điểm viền mặt về hướng chin-center.
+JNI mapping:
 
-```
-Chin-center = trung bình của points 44, 45, 46, 49
-Contour points bị kéo: indices khoảng 0–8 (viền trái) và 24–32 (viền phải)
-Magnitude: thinFaceDelta (0.0 – 0.05 trong internal units)
-```
-
-`curveWarp` là smooth falloff — pixel càng xa điểm anchor càng ít bị ảnh hưởng. Không cắt hoặc stretch cứng.
-
-**2. bigEye — to mắt**
-
-2 `enlargeEye` operations cho mắt trái và phải.
-
-```
-Mắt trái:  center = point 74, radius anchor = point 72
-Mắt phải:  center = point 77, radius anchor = point 75
-Magnitude: bigEyeDelta (0.0 – 0.10 trong internal units)
+```cpp
+SetFaceSlimLevel(face_slim / 200.0f);
+SetEyeZoomLevel(eye_enlarge / 100.0f);
 ```
 
-`enlargeEye` expand vùng tròn quanh eye center, scale UV coordinates ra ngoài → hiệu ứng phóng to.
+Warp tính trong UV space `[0,1]`, nên internal level nhỏ nhưng vẫn tạo displacement thấy được ở full-res.
 
-### Shader variants
-
-Có 2 variants GLSL trong file:
-- **Standard** (GLES3): dùng dynamic array indexing
-- **WebGL fallback**: manually unrolled loops (không dùng trên Android, nhưng cần giữ cho cross-platform build)
-
----
-
-## BeautyFaceFilter (FilterGroup)
+## BeautyFaceFilter
 
 **File:** `src/filter/beauty_face_filter.cc`
+**Type:** `FilterGroup`
 
-Là một `FilterGroup` chứa 3 filter node kết nối multi-input:
+Internal graph:
 
-```
-Input frame
-  ├──► BilateralFilter ──────────────────────────► tex1 ─┐
-  ├──► BoxHighPassFilter ────────────────────────► tex2 ─┤
-  └──────────────────────────────────────────────► tex0 ─┤
-                                                         ▼
-                                              BeautyFaceUnitFilter
-                                                         │
-                                                         ▼
-                                                   Output frame
+```text
+input
+  -> BilateralFilter -----------\
+  -> BoxHighPassFilter ---------+-> BeautyFaceUnitFilter -> output
+  -> original ------------------/
 ```
 
-`BeautyFaceUnitFilter` nhận **3 texture inputs** qua `glUniform1i`:
-- `tex0`: original frame
-- `tex1`: bilateral-blurred frame  
-- `tex2`: high-pass variance map (từ BoxHighPassFilter)
+`BeautyFaceUnitFilter` nhận 3 textures:
+
+- original frame
+- bilateral blurred frame
+- high-pass/detail map
 
 ### BilateralFilter
 
 **File:** `src/filter/bilateral_filter.cc`
 
-Hai-pass (horizontal + vertical) 9-tap Gaussian kernel với color-distance weighting.
-
-```glsl
-// Kernel weight = spatial_weight * color_weight
-// color_weight = exp(-colorDistance² / distanceNormalizationFactor²)
-```
-
-`distanceNormalizationFactor` (default 8.0) kiểm soát "edge sharpness":
-- Thấp → filter dừng lại mạnh ở edge
-- Cao → filter blur qua cả edge
-
-Bilateral filter **không** yêu cầu face landmark — nó blur toàn frame.
+Hai pass horizontal/vertical, blur có giữ edge theo color distance. Không cần landmarks.
 
 ### BoxHighPassFilter
 
-Tính variance map: `highpass = original - boxblur(original)`. Dùng để detect texture/detail vùng da. Output được dùng trong `BeautyFaceUnitFilter` để quyết định vùng nào cần smooth.
+Tạo detail/variance map từ:
 
-### BeautyFaceUnitFilter — Core Shader
+```text
+original - boxblur(original)
+```
+
+Map này giúp shader quyết định vùng nào nên smooth.
+
+### BeautyFaceUnitFilter
 
 **File:** `src/filter/beauty_face_unit_filter.cc`
 
-Đây là shader phức tạp nhất trong pipeline. Hai pass trong 1 fragment shader:
+Làm 2 nhóm xử lý:
 
-#### Pass 1: Skin Smoothing
+1. Skin smoothing:
+   - edge detection để giữ cạnh
+   - skin heuristic theo RGB
+   - blend original với bilateral output
+   - giữ/sharpen chi tiết từ high-pass
 
-```glsl
-// 1. Sobel edge detection trên tex0
-float edge = sobelEdge(tex0, uv);
-float edgeFactor = 1.0 - edge;  // bảo toàn edge
+2. Whitening:
+   - `lookup_gray.png`
+   - `lookup_origin.png`
+   - `lookup_skin.png`
+   - `lookup_light.png` bound vào uniform `lookUpCustom`
+   - blend theo uniform `whiten`
 
-// 2. Skin detection mask (heuristic dựa trên red channel)
-float p = isSkin(tex0.r, tex0.g, tex0.b);
+Native defaults trong `nativeInit`:
 
-// 3. Variance-based blend (từ highpass map)
-float kMin = varianceBlend(tex2);
-
-// 4. Mix original + bilateral, add sharpening detail
-float smoothed = mix(tex0, tex1, edgeFactor * p * kMin);
-smoothed += (tex0 - tex1) * sharpen * edgeFactor;
+```cpp
+g_beauty->SetBlurAlpha(0.7f);
+g_beauty->SetWhite(0.1f);
 ```
 
-**Quan trọng:** Skin detection là heuristic RGB, **không dùng landmark**. Hoạt động trên mọi vùng da trong frame, không chỉ mặt.
+Runtime values đến từ sliders qua JNI setters.
 
-#### Pass 2: Whitening (LUT Chain)
+## SinkRender
 
-```glsl
-// Bước 1: lookup_gray.png (1D strip LUT)
-vec3 step1 = texture(lookupGray, vec2(color.r, 0.5)).rgb;
+**File:** `src/sink/sink_render.cc`
 
-// Bước 2: lookup_origin.png (4×4×16 3D LUT)
-vec3 step2 = sampleLUT3D(lookupOrigin, step1);
+Preview sink render terminal texture ra EGL window surface lấy từ `ANativeWindow`. Fill mode đang dùng:
 
-// Bước 3: lookup_skin.png (4×4×16 3D LUT)
-vec3 step3 = sampleLUT3D(lookupSkin, step2);
-
-// Bước 4: lookup_light.png bound vào uniform lookUpCustom
-vec3 step4 = sampleLUT3D(lookupCustom, step3);
-
-// Blend với original theo uniform 'whiten'
-result = mix(smoothed, step4, whiten);
+```cpp
+SinkRender::PreserveAspectRatioAndFill
 ```
 
-Thay bất kỳ LUT file nào đang được bind để thay đổi tone màu. Xem [assets-textures.md](assets-textures.md) để biết format và lưu ý `lookup_light.png` hiện là file bound vào `lookUpCustom`.
-
----
+Path này tránh copy result về Java, nên là path chính cho realtime preview.
 
 ## SinkRawData
 
 **File:** `src/sink/sink_raw_data.cc`
 
-Đọc kết quả từ GL framebuffer về CPU memory:
+Readback texture về CPU bằng:
 
 ```cpp
-glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba_buffer_);
+glReadPixels(..., GL_RGBA, GL_UNSIGNED_BYTE, rgba_buffer_);
 ```
 
-Buffer được pre-allocated trong `SinkRawData`. JNI đọc qua `GetRgbaBuffer()` rồi `memcpy` kết quả vào direct `outRgba` buffer do Java truyền vào; không copy qua heap Java.
+JNI copy buffer này vào direct `ByteBuffer` caller truyền vào. Dùng cho:
 
-Có thể convert sang I420 (YUV) qua libyuv `ARGBToI420` nếu cần encode video.
+- `processInto` với picked image/fallback RGBA.
+- `processIntoYuv` với capture camera.
 
----
+Không dùng cho preview realtime trừ khi app đổi sang readback path.
 
-## Thêm Filter vào Pipeline
+## Face Detector
 
-Xem [extending-filters.md](extending-filters.md) để biết pattern thêm filter node mới.
+**Files:** `src/face_detector/face_detector.cc`, `third_party/mars-face-kit`
+
+JNI gọi:
+
+```cpp
+g_face_detector->Detect(
+    pixels, width, height, width * 4,
+    GPUPIXEL_MODE_FMT_VIDEO,
+    GPUPIXEL_FRAME_TYPE_RGBA);
+```
+
+Landmarks trả về được push vào `BlusherFilter` và `FaceReshapeFilter`. `BeautyFaceFilter` không cần landmarks.
+
+## Adding Filters
+
+Xem [extending-filters.md](extending-filters.md). Điểm cần nhớ với pipeline hiện tại: nếu filter mới cần xuất hiện cả preview lẫn capture, wire nó trước terminal `BeautyFaceFilter` hoặc cập nhật `PipelineTerminal()`/sink attach logic trong `jni_bridge.cc`.

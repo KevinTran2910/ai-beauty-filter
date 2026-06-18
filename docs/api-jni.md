@@ -1,167 +1,233 @@
 # JNI API Reference
 
-**Class:** `com.aibeauty.beautyfilter.BeautyFilterNative`  
-**File:** `app/src/main/java/com/aibeauty/beautyfilter/BeautyFilterNative.java`  
+**Java class:** `app/src/main/java/com/aibeauty/beautyfilter/BeautyFilterNative.java`
 **Native impl:** `src/android/jni/jni_bridge.cc`
+**Library:** `libbeautyfilter.so`
 
-Public API là static wrapper methods (`init`, `destroy`, ...), còn JNI symbols map tới các private native methods (`nativeInit`, `nativeDestroy`, ...). Class load hai shared library theo thứ tự:
+`BeautyFilterNative` là wrapper static. Public Java methods gọi private native methods có symbol dạng:
 
-```java
-System.loadLibrary("mars-face-kit");   // prebuilt, dependency của libbeautyfilter khi face detector ON
-System.loadLibrary("beautyfilter");    // pipeline chính
+```text
+Java_com_aibeauty_beautyfilter_BeautyFilterNative_native*
 ```
 
-`mars-face-kit` được load trong `try/catch`; build không có face detector vẫn chạy nếu library này không có mặt.
-
-> **Thread safety:** Tất cả calls phải được serialize trên một thread duy nhất. Trong `MainActivity`, đây là `cameraExecutor`. Không gọi từ UI thread hoặc callback thread khác.
-
----
-
-## Lifecycle Methods
-
-### `init(String resourceRoot) → int`
-
-Khởi tạo pipeline. Phải gọi trước bất kỳ method nào khác.
+## Library Loading
 
 ```java
-int result = BeautyFilterNative.init(context.getFilesDir().getAbsolutePath());
+try {
+    System.loadLibrary("mars-face-kit");
+} catch (UnsatisfiedLinkError ignored) {
+}
+System.loadLibrary("beautyfilter");
 ```
 
-`resourceRoot` là thư mục chứa `res/` và `models/` (copy từ assets trước khi gọi).
+`mars-face-kit` là dependency khi build với `GPUPIXEL_ENABLE_FACE_DETECTOR=ON`. Load trong `try/catch` để build không có detector vẫn chạy được.
 
-**Return values:**
+## Threading Contract
+
+Serialize mọi call native trên một thread. Trong app hiện tại là:
+
+```java
+Executors.newSingleThreadExecutor()
+```
+
+Lý do:
+
+- Native giữ global pipeline state.
+- JNI bridge có mutex, nhưng Java vẫn cần giữ thứ tự init, detect, render, setter, destroy.
+- GL context/surface switching cần sequence ổn định.
+
+Không gọi các method processing trực tiếp từ UI thread.
+
+## Lifecycle
+
+### `init(String resourceRoot) -> int`
+
+Khởi tạo resource root, filter graph, face detector và sink.
+
+```java
+int rc = BeautyFilterNative.init(getFilesDir().getAbsolutePath());
+```
+
+`resourceRoot` phải chứa:
+
+```text
+res/
+  lookup_gray.png
+  lookup_origin.png
+  lookup_skin.png
+  lookup_light.png
+  lookup_custom.png
+  blusher.png
+  mouth.png
+models/
+  face_det.mars_model
+  face_align.mars_model
+```
+
+Return values:
 
 | Value | Ý nghĩa |
 |---|---|
-| `0` | Thành công |
-| `1` | Đã init rồi (gọi lại là no-op an toàn) |
-| `< 0` | Lỗi (xem logcat tag `BeautyFilter`) |
-
-**Native side:** tạo `GPUPixelContext` (EGL context + GL thread), khởi tạo toàn bộ pipeline graph, load model files cho face detector, load LUT textures từ `resourceRoot/res/`.
-
----
+| `0` | Init thành công |
+| `1` | Đã init trước đó |
+| `< 0` | Lỗi tạo pipeline |
 
 ### `destroy()`
 
-Giải phóng toàn bộ GL resources, model, và EGL context.
+Giải phóng pipeline globals, render sink, raw sink, face detector và window surface.
 
-```java
-BeautyFilterNative.destroy();
+## Surface Preview API
+
+### `setOutputSurface(Surface surface, int width, int height) -> boolean`
+
+Attach native renderer vào `SurfaceView`.
+
+Native flow:
+
+```text
+ANativeWindow_fromSurface
+-> GPUPixelContext::SetWindowSurface
+-> update render size
 ```
 
-Gọi trong `onDestroy()` hoặc khi không dùng camera nữa. Sau `destroy()`, phải gọi `init()` lại trước khi dùng tiếp.
+### `resizeOutputSurface(int width, int height)`
 
----
+Cập nhật viewport/render size khi `SurfaceHolder.surfaceChanged` chạy.
 
-## Processing Methods
+### `clearOutputSurface()`
 
-### `processInto(ByteBuffer inRgba, int width, int height, ByteBuffer outRgba) → boolean`
+Detach `SinkRender` khỏi terminal filter và clear EGL window surface. Được gọi khi surface bị destroy hoặc chuyển sang image mode.
 
-Xử lý một frame qua toàn bộ filter pipeline.
+## Processing API
+
+### `processPreviewYuv(...) -> boolean`
+
+Realtime camera preview path.
 
 ```java
-boolean ok = BeautyFilterNative.processInto(inBuffer, width, height, outBuffer);
+BeautyFilterNative.processPreviewYuv(
+    y, u, v,
+    width, height,
+    yStride, uStride, vStride,
+    uvPixelStride,
+    rotationMode);
 ```
 
-**Requirements:**
-- `inRgba`: `ByteBuffer.allocateDirect(width * height * 4)`, format RGBA_8888
-- `outRgba`: `ByteBuffer.allocateDirect(width * height * 4)`, cùng kích thước
-- Cả hai buffer phải là **direct** ByteBuffer (không phải heap buffer)
-- Không được call từ 2 thread cùng lúc
+Input là 3 direct buffers từ `ImageProxy.PlaneProxy` của `YUV_420_888`.
 
-**Return:** `true` nếu thành công. `false` nếu pipeline chưa init hoặc lỗi GL.
+Native xử lý:
 
-**Performance note:** Call này block cho đến khi `glReadPixels` hoàn thành trên GL thread (~3–8ms tùy thiết bị và resolution).
+1. Lấy address bằng `GetDirectBufferAddress`.
+2. Repack Android `YUV_420_888` sang tight I420 bằng `libyuv::Android420ToI420`.
+3. Attach `SinkRender`.
+4. Switch sang EGL window surface.
+5. `SourceRawData::ProcessData(..., GPUPIXEL_FRAME_TYPE_YUVI420)`.
+6. Present buffer ra `SurfaceView`.
 
----
+Không có `glReadPixels` trong path này.
+
+### `processIntoYuv(...) -> boolean`
+
+Capture path từ camera YUV sang RGBA output buffer.
+
+```java
+BeautyFilterNative.processIntoYuv(
+    y, u, v,
+    width, height,
+    yStride, uStride, vStride,
+    uvPixelStride,
+    rotationMode,
+    outRgba);
+```
+
+Khác `processPreviewYuv` ở sink:
+
+- dùng pbuffer/off-screen surface
+- attach `SinkRawData`
+- copy kết quả RGBA vào `outRgba`
+
+`outRgba` phải là direct `ByteBuffer` đủ cho kích thước frame sau rotation:
+
+```text
+rotatedWidth * rotatedHeight * 4
+```
+
+### `processInto(ByteBuffer inRgba, int width, int height, ByteBuffer outRgba) -> boolean`
+
+Path RGBA dùng cho picked image hoặc fallback still processing.
+
+Requirements:
+
+- `inRgba` direct buffer, format RGBA, size `width * height * 4`.
+- `outRgba` direct buffer, size tương tự.
+- Caller đã đưa frame về orientation mong muốn.
+
+Native set `NoRotation`, process qua graph rồi readback bằng `SinkRawData`.
 
 ### `detectFace(ByteBuffer smallRgba, int width, int height)`
 
-Chạy face detection + landmark extraction, cập nhật internal landmark state cho blusher và reshape filters.
+Chạy face detector và update landmarks cho:
 
-```java
-BeautyFilterNative.detectFace(smallBuffer, smallW, smallH);
+```cpp
+g_blusher->SetFaceLandmarks(landmarks);
+g_reshape->SetFaceLandmarks(landmarks);
 ```
 
-**Requirements:**
-- `smallRgba`: Direct ByteBuffer, RGBA_8888
-- Nên downscale frame về max 320px (cạnh dài) trước khi gọi để tiết kiệm CPU
-- Landmarks được normalize về [0,1] bởi mars-face-kit — tự động scale lên full resolution khi apply
+Input nên là RGBA frame nhỏ, đã upright/mirrored giống preview output. App hiện tại tạo từ Y plane:
 
-**Gọi bao nhiêu:** `MainActivity` gọi mỗi 2 frame. Có thể điều chỉnh tỷ lệ này tùy performance budget.
+- longest side max `320px`
+- detect mỗi `DETECT_EVERY = 2` frame
+- direct `ByteBuffer`
 
-**Khi không có mặt trong frame:** `FaceDetector::Detect()` trả về vector rỗng. `FaceReshapeFilter` cần ít nhất 106 điểm, còn `FaceMakeupFilter`/`BlusherFilter` cần ít nhất 111 điểm vì mesh index lên tới 110; nếu thiếu, `has_face_` set về `false` và filter pass-through. BeautyFaceFilter vẫn chạy bình thường.
-
----
+Khi build tắt detector, method là no-op.
 
 ## Parameter Setters
 
 ### `setBeautyParams(float smoothing, float whitening)`
 
-```java
-BeautyFilterNative.setBeautyParams(7.0f, 2.0f);
-```
+| Param | UI range | Native mapping | Target |
+|---|---:|---:|---|
+| `smoothing` | `0..10` | `smoothing / 10.0` | `BeautyFaceFilter::SetBlurAlpha` |
+| `whitening` | `0..10` | `whitening / 20.0` nếu `> 0` | `BeautyFaceFilter::SetWhite` |
 
-| Param | Range (UI) | Internal range | Mapping | Filter |
-|---|---|---|---|---|
-| `smoothing` | 0.0 – 10.0 | 0.0 – 1.0 | `x / 10.0` | BilateralFilter `blurAlpha` |
-| `whitening` | 0.0 – 10.0 | 0.0 – 0.5 | `x / 20.0` | `whiten` uniform trong BeautyFaceUnitFilter |
-
-**Whitening capped ở 0.5** để tránh over-whitening. Giá trị UI = 10 tương đương 50% blend với output LUT chain.
-
----
+Lưu ý: với code hiện tại, nếu `whitening <= 0`, JNI không gọi `SetWhite(0)`. Slider về 0 sau khi từng tăng có thể không reset whitening về 0 nếu không sửa native condition.
 
 ### `setReshapeParams(float faceSlim, float eyeEnlarge)`
 
-```java
-BeautyFilterNative.setReshapeParams(0.0f, 0.0f);
-```
+| Param | UI range | Native mapping | Target |
+|---|---:|---:|---|
+| `faceSlim` | `0..10` | `faceSlim / 200.0` | `FaceReshapeFilter::SetFaceSlimLevel` |
+| `eyeEnlarge` | `0..10` | `eyeEnlarge / 100.0` | `FaceReshapeFilter::SetEyeZoomLevel` |
 
-| Param | Range (UI) | Internal range | Mapping | Filter |
-|---|---|---|---|---|
-| `faceSlim` | 0.0 – 10.0 | 0.0 – 0.05 | `x / 200.0` | `thinFaceDelta` trong FaceReshapeFilter |
-| `eyeEnlarge` | 0.0 – 10.0 | 0.0 – 0.10 | `x / 100.0` | `bigEyeDelta` trong FaceReshapeFilter |
-
-**Lý do scale nhỏ:** Warp displacement được tính trong UV space [0,1]. 0.05 UV unit ở full HD là ~54px — đủ để thấy hiệu ứng mà không bị artifact.
-
-> **Chỉ hoạt động khi có face detection.** Nếu `detectFace()` chưa được gọi hoặc không detect được mặt, reshape pass-through.
-
----
+Chỉ có hiệu ứng khi có landmarks hợp lệ.
 
 ### `setMakeupParams(float blusher)`
 
-```java
-BeautyFilterNative.setMakeupParams(0.0f);
+| Param | UI range | Native mapping | Target |
+|---|---:|---:|---|
+| `blusher` | `0..10` | `blusher / 10.0` | `BlusherFilter::SetBlendLevel` |
+
+Chỉ có hiệu ứng khi có landmarks hợp lệ.
+
+## Perf Stats
+
+### `getPerfStats() -> float[]`
+
+Native trả 4 giá trị:
+
+```text
+[0] last preview native time in ms
+[1] last readback native time in ms
+[2] surface width
+[3] surface height
 ```
 
-| Param | Range (UI) | Internal range | Mapping | Filter |
-|---|---|---|---|---|
-| `blusher` | 0.0 – 10.0 | 0.0 – 1.0 | `x / 10.0` | `blendLevel` alpha của BlusherFilter |
-
-`blendLevel = 0` → blusher invisible, `blendLevel = 1` → blusher 100% opaque.
-
-> **Chỉ hoạt động khi có face detection.**
-
----
-
-## Default Values (trong MainActivity)
-
-```java
-// Native defaults set in nativeInit()
-g_beauty->SetBlurAlpha(0.7f);
-g_beauty->SetWhite(0.1f);
-
-// Runtime values are read from seekSmoothing/seekWhitening/seekSlim/seekEye/seekBlush
-// and pushed through setBeautyParams/setReshapeParams/setMakeupParams.
-```
-
----
+`MainActivity.PerfStats` dùng các giá trị này để hiển thị overlay.
 
 ## Error Handling
 
-Native code log qua Android `__android_log_print` với tag `BeautyFilter` (`INFO` và `ERROR`). Không throw exception về Java — check return value của `init()` và `processInto()`.
+Native không throw Java exception cho lỗi thường gặp. Các method processing trả `false`; lifecycle trả code. Xem log:
 
 ```bash
-# Xem native logs
-adb logcat -s BeautyFilter
+adb logcat -s BeautyFilter BeautyFilterDemo AndroidRuntime
 ```

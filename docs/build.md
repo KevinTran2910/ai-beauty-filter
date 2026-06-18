@@ -1,177 +1,209 @@
 # Build Guide
 
-## Yêu Cầu Môi Trường
+## Toolchain
 
-| Tool | Version | Ghi chú |
+| Tool | Version/source | Ghi chú |
 |---|---|---|
-| Android Studio | Hedgehog 2023.1.1+ | Hoặc dùng command line |
-| Android SDK | API 35 (compileSdk) | |
-| Android NDK | r25c hoặc r26 | Xem `local.properties` cho path |
-| CMake | 3.22.1 | Cài qua SDK Manager |
-| Java | 17 | Source/target compatibility |
-| Gradle | 8.x (AGP 8.6.0) | Wrapper đã có sẵn |
-| ABI | arm64-v8a, armeabi-v7a | **Chỉ hai ABI này** |
+| Android Gradle Plugin | `8.6.0` | Khai báo ở root `build.gradle` |
+| Gradle wrapper | `8.7` | `gradle/wrapper/gradle-wrapper.properties` |
+| Java | 17 | `sourceCompatibility` và `targetCompatibility` |
+| Android SDK | compile/target `35` | `app/build.gradle` |
+| Min SDK | `24` | Android 7.0+ |
+| CMake | `3.22.1` | Config trong `externalNativeBuild` |
+| C++ | C++11 | Root `CMakeLists.txt` |
+| NDK ABI | `arm64-v8a`, `armeabi-v7a` | Do `mars-face-kit` chỉ có 2 ABI này |
 
-> **mars-face-kit constraint:** Thư viện prebuilt chỉ có cho `arm64-v8a` và `armeabi-v7a`. Không thêm `x86` hoặc `x86_64` vào `abiFilters` — build sẽ fail khi link.
+## Dependencies
 
----
+Java/Android:
 
-## Setup Local
-
-### 1. Cài NDK và CMake
-
-Trong Android Studio: **SDK Manager → SDK Tools → NDK (Side by side) + CMake 3.22.1**
-
-Hoặc command line:
-```bash
-sdkmanager "ndk;25.2.9519653"
-sdkmanager "cmake;3.22.1"
+```groovy
+implementation 'androidx.appcompat:appcompat:1.7.0'
+implementation 'androidx.camera:camera-core:1.3.4'
+implementation 'androidx.camera:camera-camera2:1.3.4'
+implementation 'androidx.camera:camera-lifecycle:1.3.4'
 ```
 
-### 2. Tạo `local.properties`
+Native:
+
+- GPUPixel source trong repo, target output là `libbeautyfilter.so`.
+- OpenGL ES 3, EGL, `android`, `jnigraphics`, `log` từ Android NDK.
+- `libyuv` build từ `third_party/libyuv`.
+- `stb` header-only từ `third_party/stb`.
+- `mars-face-kit` prebuilt shared library từ `third_party/mars-face-kit/libs/android/<abi>/libmars-face-kit.so`.
+
+## Local Setup
+
+Tạo `local.properties` theo máy local:
 
 ```properties
 sdk.dir=C\:\\Users\\<username>\\AppData\\Local\\Android\\Sdk
 ndk.dir=C\:\\Users\\<username>\\AppData\\Local\\Android\\Sdk\\ndk\\25.2.9519653
 ```
 
-File này **không commit** (có trong `.gitignore`). Mỗi dev tạo riêng.
+`local.properties` không commit.
 
-### 3. Sync Gradle
+Build debug:
+
+```bash
+./gradlew.bat app:assembleDebug
+```
+
+Trên macOS/Linux:
 
 ```bash
 ./gradlew app:assembleDebug
 ```
 
-Lần đầu sẽ download dependencies và build CMake — mất 5–10 phút.
+## Gradle/CMake Config
 
----
-
-## CMake Build Flags
-
-Được define trong `app/build.gradle`:
+`app/build.gradle` trỏ CMake về root:
 
 ```groovy
 externalNativeBuild {
     cmake {
-        arguments "-DGPUPIXEL_BUILD_SHARED_LIBS=ON",
-                  "-DGPUPIXEL_ENABLE_FACE_DETECTOR=ON",
-                  "-DGPUPIXEL_BUILD_DESKTOP_DEMO=OFF",
-                  "-DANDROID_STL=c++_static"
+        path '../CMakeLists.txt'
+        version '3.22.1'
     }
 }
 ```
 
-| Flag | Value | Ý nghĩa |
-|---|---|---|
-| `GPUPIXEL_BUILD_SHARED_LIBS` | `ON` | Build `libbeautyfilter.so` (shared), không phải static |
-| `GPUPIXEL_ENABLE_FACE_DETECTOR` | `ON` | Bật face detector, blusher, reshape. Tắt → chỉ beauty smoothing |
-| `GPUPIXEL_BUILD_DESKTOP_DEMO` | `OFF` | Không build desktop demo targets |
-| `ANDROID_STL` | `c++_static` | Static link C++ STL để tránh ABI issues |
-
-### Tắt Face Detector (khi debug hoặc cần performance)
+Native build arguments:
 
 ```groovy
-arguments "-DGPUPIXEL_ENABLE_FACE_DETECTOR=OFF"
+arguments '-DGPUPIXEL_BUILD_SHARED_LIBS=ON',
+          '-DGPUPIXEL_ENABLE_FACE_DETECTOR=ON',
+          '-DGPUPIXEL_BUILD_DESKTOP_DEMO=OFF',
+          '-DANDROID_STL=c++_static'
+targets 'beautyfilter'
 ```
 
-Khi OFF: Pipeline chỉ còn `SourceRawData → BeautyFaceFilter → SinkRawData`. BlusherFilter và FaceReshapeFilter không được compile vào.
+Ý nghĩa:
 
----
+| Flag | Value | Ý nghĩa |
+|---|---|---|
+| `GPUPIXEL_BUILD_SHARED_LIBS` | `ON` | Build shared library `libbeautyfilter.so` |
+| `GPUPIXEL_ENABLE_FACE_DETECTOR` | `ON` | Link `mars-face-kit`, bật landmark filters |
+| `GPUPIXEL_BUILD_DESKTOP_DEMO` | `OFF` | Không build desktop demo target |
+| `ANDROID_STL` | `c++_static` | Static link C++ STL |
 
-## Cấu Trúc Output
+## ABI Constraint
 
+`app/build.gradle` chỉ build:
+
+```groovy
+ndk {
+    abiFilters 'arm64-v8a', 'armeabi-v7a'
+}
 ```
+
+Không thêm `x86` hoặc `x86_64` nếu vẫn bật face detector, vì `mars-face-kit` không có prebuilt `.so` cho các ABI đó. CMake sẽ fail khi không tìm thấy:
+
+```text
+third_party/mars-face-kit/libs/android/<ABI>/libmars-face-kit.so
+```
+
+## Native Output
+
+Build tạo:
+
+```text
 app/build/intermediates/cmake/debug/obj/
-  arm64-v8a/
-    libbeautyfilter.so    ← pipeline + JNI bridge
-  armeabi-v7a/
-    libbeautyfilter.so
+  arm64-v8a/libbeautyfilter.so
+  armeabi-v7a/libbeautyfilter.so
+```
 
-# Prebuilt được copy từ:
+APK cũng package prebuilt:
+
+```text
 third_party/mars-face-kit/libs/android/
   arm64-v8a/libmars-face-kit.so
   armeabi-v7a/libmars-face-kit.so
 ```
 
----
+## Android 15/16 Native Lib Alignment
 
-## Android 15+ Compatibility
+Gradle config:
 
 ```groovy
 packagingOptions {
-    jniLibs.useLegacyPackaging = false
+    jniLibs {
+        useLegacyPackaging false
+    }
 }
 ```
 
-**Lý do:** Android 15 và Android 16 yêu cầu shared libraries phải được **16KB page-aligned** khi package vào APK. `useLegacyPackaging = false` giữ `.so` files không bị compress trong APK, cho phép mmap trực tiếp với alignment chính xác.
+CMake Android target cũng set:
 
-Nếu set `true`, app sẽ crash khi chạy trên thiết bị Android 16 với kernel 16KB page size (dòng máy mới).
+```cmake
+target_link_options(beautyfilter PRIVATE "-Wl,-z,max-page-size=16384")
+```
 
----
+Mục tiêu là đảm bảo native libraries phù hợp thiết bị dùng 16KB page size.
+
+## Permissions Và Features
+
+Manifest dùng:
+
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission
+    android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+    android:maxSdkVersion="28" />
+<uses-feature
+    android:name="android.hardware.camera.any"
+    android:required="false" />
+```
+
+API 29+ lưu ảnh qua `MediaStore`, không cần `WRITE_EXTERNAL_STORAGE`.
 
 ## Troubleshooting
 
-### Lỗi: `No implementation found for native method`
+### `No implementation found for native method`
 
-```
-java.lang.UnsatisfiedLinkError: No implementation found for 
-com.aibeauty.beautyfilter.BeautyFilterNative.nativeInit
-```
+Nguyên nhân thường là `libbeautyfilter.so` chưa build, ABI runtime không khớp, hoặc method JNI trong `BeautyFilterNative.java` không khớp symbol trong `jni_bridge.cc`.
 
-**Nguyên nhân:** `libbeautyfilter.so` chưa được build hoặc ABI không match.  
-**Fix:** Xóa `app/build/`, sync lại, chạy `assembleDebug`. Nếu log ghi thiếu symbol cho `nativeInit`/`nativeProcessInto`, kiểm tra tên method private trong `BeautyFilterNative.java` có match symbol `Java_com_aibeauty_beautyfilter_BeautyFilterNative_native*` trong `jni_bridge.cc`.
+Kiểm tra:
 
-### Lỗi: `libmars-face-kit.so not found`
-
-**Nguyên nhân:** `jniLibs.srcDirs` không trỏ đúng path prebuilt.  
-**Fix:** Kiểm tra `app/build.gradle`:
-```groovy
-sourceSets.main.jniLibs.srcDirs = ['../../third_party/mars-face-kit/libs/android']
+```bash
+./gradlew.bat app:assembleDebug
+adb logcat -s BeautyFilter AndroidRuntime
 ```
 
-### Lỗi CMake: `mars-face-kit` headers không tìm thấy
+### `libmars-face-kit.so not found`
 
-**Fix:** Kiểm tra `third_party/mars-face-kit/include/` có đầy đủ headers chưa. Nếu thiếu, cần lấy từ package gốc.
-
-### Build thành công nhưng app crash ngay khi mở
-
-1. Xem logcat: `adb logcat -s BeautyFilter,AndroidRuntime`
-2. Thường do camera permission bị deny hoặc `init()` fail do không copy được assets
-3. Kiểm tra `getFilesDir()` có write permission không (thường do SELinux trên một số device)
-
-### Hiệu năng thấp (FPS < 15)
-
-1. Tắt face detector nếu không cần reshape/blusher
-2. Giảm resolution từ 640×480 xuống 480×360
-3. Tăng detection skip rate từ 2 lên 3–4
-4. Profile bằng Android GPU Inspector để tìm GL bottleneck
-
----
-
-## Build Release
+Kiểm tra `jniLibs` path:
 
 ```groovy
-// app/build.gradle — thêm signing config
-signingConfigs {
-    release {
-        keyAlias '...'
-        keyPassword '...'
-        storeFile file('release.jks')
-        storePassword '...'
-    }
-}
-buildTypes {
-    release {
-        minifyEnabled true
-        proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        signingConfig signingConfigs.release
-    }
-}
+jniLibs.srcDirs += ['../../third_party/mars-face-kit/libs/android']
 ```
 
-Proguard rules hiện tại đã có keep rule cho JNI class:
+Và đảm bảo thiết bị/emulator dùng `arm64-v8a` hoặc `armeabi-v7a`.
 
-```proguard
--keep class com.aibeauty.beautyfilter.BeautyFilterNative { *; }
+### CMake không tìm thấy mars-face-kit prebuilt
+
+Nếu đang build ABI khác, bỏ ABI đó khỏi `abiFilters` hoặc tắt:
+
+```groovy
+'-DGPUPIXEL_ENABLE_FACE_DETECTOR=OFF'
 ```
+
+Khi OFF, reshape/blusher không có detector để hoạt động.
+
+### Preview đen hoặc không render
+
+Kiểm tra:
+
+- `SurfaceView` đã gọi `surfaceCreated/surfaceChanged`.
+- `BeautyFilterNative.setOutputSurface(...)` trả `true`.
+- Camera permission đã granted.
+- Logcat tag `BeautyFilterDemo` và `BeautyFilter`.
+
+### FPS thấp
+
+Các điểm nên kiểm tra:
+
+- Resolution CameraX đang là `1920x1080`; giảm xuống 1280x720 hoặc thấp hơn nếu cần.
+- Tăng `DETECT_EVERY` từ 2 lên 3 hoặc 4.
+- Tắt face detector khi chỉ benchmark smoothing/whitening.
+- Xem overlay `Native`, `Detect`, `Interval`, `CPU app`.
