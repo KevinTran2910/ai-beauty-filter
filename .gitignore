@@ -1,0 +1,50 @@
+# Built output
+/build/
+app/build/
+**/build/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Local config (contains SDK/NDK paths — machine-specific)
+local.properties
+
+# IDE — Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+
+# Native build artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+*.ninja_deps
+*.ninja_log
+.ninja_deps
+.ninja_log
+/src/**/*.o
+/src/**/*.a
+/src/**/*.so
+
+# Compiled shared libraries that should be built, not committed
+app/src/main/jniLibs/
+
+# Proguard mapping (generated per build)
+app/proguard/
+
+# Keystore / signing (never commit)
+*.jks
+*.keystore
+keystore.properties
+
+# OS artifacts
+Thumbs.db
+ehthumbs.db
+Desktop.ini
