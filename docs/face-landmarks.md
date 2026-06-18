@@ -1,4 +1,4 @@
-# Face Landmarks — Hệ Tọa Độ 106 Điểm
+# Face Landmarks — Hệ Tọa Độ Landmark
 
 ## Tổng Quan
 
@@ -34,7 +34,7 @@ if (g_reshape) g_reshape->SetFaceLandmarks(landmarks);
        0─────────16   ← Jawline: 0–16 (17 points)
 ```
 
-### Mapping chính xác theo mars-face-kit 106-point model
+### Mapping quan sát được theo mars-face-kit model
 
 | Index range | Vùng mặt | Ghi chú |
 |---|---|---|
@@ -96,9 +96,9 @@ Triangle indices được hardcode trong `face_makeup_filter.cc`. Mesh này defi
 ### FaceMakeupFilter — clip space conversion
 
 ```cpp
-// Trong face_makeup_filter.cc, khi render GL mesh:
-float clipX = landmark.x * 2.0f - 1.0f;  // [0,1] → [-1,1]
-float clipY = 1.0f - landmark.y * 2.0f;  // [0,1] → [1,-1] (Y flip vì GL)
+// Trong FaceMakeupFilter::SetFaceLandmarks():
+float clipX = landmark.x * 2.0f - 1.0f;  // [0,1] -> [-1,1]
+float clipY = landmark.y * 2.0f - 1.0f;  // [0,1] -> [-1,1]
 ```
 
 ### FaceReshapeFilter — UV space

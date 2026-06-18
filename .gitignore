@@ -48,3 +48,7 @@ keystore.properties
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Runtime Cache
+app/.cxx
+app/build

@@ -102,7 +102,7 @@ Landmarks được normalize về [0,1] bởi mars-face-kit. Filter C++ nhận f
 
 | Kỹ thuật | Mục đích |
 |---|---|
-| `ByteBuffer.allocateDirect()` | Zero-copy JNI — không copy heap Java ↔ native |
+| `ByteBuffer.allocateDirect()` | Native truy cập Java buffer trực tiếp qua `GetDirectBufferAddress`; tránh copy qua heap Java |
 | `FBO pool` (FramebufferFactory) | Tái dụng GL framebuffer, tránh alloc/free per-frame |
 | Detection mỗi 2 frame | Giảm 50% CPU cost của face detector |
 | Downscale 320px cho detect | mars-face-kit chạy nhanh hơn; landmark sau đó apply lên full-res |

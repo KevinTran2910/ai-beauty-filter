@@ -207,7 +207,7 @@ Thay bất kỳ LUT file nào đang được bind để thay đổi tone màu. X
 glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba_buffer_);
 ```
 
-Buffer được pre-allocated, Java đọc qua `GetRgbaBuffer()` trả về pointer vào `rgba_buffer_`. Direct ByteBuffer phía Java trỏ vào cùng vùng nhớ này — không copy.
+Buffer được pre-allocated trong `SinkRawData`. JNI đọc qua `GetRgbaBuffer()` rồi `memcpy` kết quả vào direct `outRgba` buffer do Java truyền vào; không copy qua heap Java.
 
 Có thể convert sang I420 (YUV) qua libyuv `ARGBToI420` nếu cần encode video.
 

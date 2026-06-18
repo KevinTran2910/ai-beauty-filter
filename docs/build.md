@@ -116,7 +116,7 @@ Nếu set `true`, app sẽ crash khi chạy trên thiết bị Android 16 với 
 
 ```
 java.lang.UnsatisfiedLinkError: No implementation found for 
-com.aibeauty.beautyfilter.BeautyFilterNative.init
+com.aibeauty.beautyfilter.BeautyFilterNative.nativeInit
 ```
 
 **Nguyên nhân:** `libbeautyfilter.so` chưa được build hoặc ABI không match.  
