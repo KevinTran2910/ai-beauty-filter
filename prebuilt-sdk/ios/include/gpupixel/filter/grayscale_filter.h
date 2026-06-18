@@ -1,0 +1,18 @@
+#pragma once
+
+#include "gpupixel/gpupixel_define.h"
+#include "gpupixel/filter/filter.h"
+
+namespace gpupixel {
+class GPUPIXEL_API GrayscaleFilter : public Filter {
+ public:
+  static std::shared_ptr<GrayscaleFilter> Create();
+  bool Init();
+
+  virtual bool DoRender(bool updateSinks = true) override;
+
+ protected:
+  GrayscaleFilter() {};
+};
+
+}  // namespace gpupixel

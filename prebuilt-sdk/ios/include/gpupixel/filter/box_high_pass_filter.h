@@ -1,0 +1,30 @@
+#pragma once
+
+#include "gpupixel/gpupixel_define.h"
+
+#include "gpupixel/filter/box_blur_filter.h"
+#include "gpupixel/filter/box_difference_filter.h"
+#include "gpupixel/filter/filter_group.h"
+namespace gpupixel {
+class GPUPIXEL_API BoxHighPassFilter : public FilterGroup {
+ public:
+  static std::shared_ptr<BoxHighPassFilter> Create();
+  ~BoxHighPassFilter();
+  bool Init();
+
+  void SetRadius(float radius);
+  void SetDelta(float delta);
+
+  virtual void SetInputFramebuffer(
+      std::shared_ptr<GPUPixelFramebuffer> framebuffer,
+      RotationMode rotation_mode /* = NoRotation*/,
+      int texIdx /* = 0*/) override;
+
+ protected:
+  BoxHighPassFilter();
+
+  std::shared_ptr<BoxBlurFilter> box_blur_filter_;
+  std::shared_ptr<BoxDifferenceFilter> box_difference_filter_;
+};
+
+}  // namespace gpupixel
