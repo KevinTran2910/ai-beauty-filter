@@ -156,8 +156,11 @@ void SinkRender::UpdateDisplayVertices() {
   } else if (fill_mode_ == FillMode::PreserveAspectRatioAndFill) {
     float fitted_width_scale = inset_framebuffer_width / view_width_;
     float fitted_height_scale = inset_framebuffer_height / view_height_;
-    scaled_width = fitted_width_scale > 0.0f ? 1.0f / fitted_width_scale : 1.0f;
-    scaled_height = fitted_height_scale > 0.0f ? 1.0f / fitted_height_scale : 1.0f;
+    float fill_scale = fitted_width_scale < fitted_height_scale
+                           ? 1.0f / fitted_width_scale
+                           : 1.0f / fitted_height_scale;
+    scaled_width = fitted_width_scale * fill_scale;
+    scaled_height = fitted_height_scale * fill_scale;
   }
 
   display_vertices_[0] = -scaled_width;
