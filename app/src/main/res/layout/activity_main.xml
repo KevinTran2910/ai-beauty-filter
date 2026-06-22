@@ -1,52 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000"
-    android:orientation="vertical">
+    android:background="#000000">
 
-    <!-- Live (or picked-image) filtered output. -->
-    <FrameLayout
+    <!-- Live (or picked-image) filtered output, fills the whole screen. -->
+    <SurfaceView
+        android:id="@+id/texturePreview"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="3"
-        android:background="#000000">
+        android:layout_height="match_parent" />
 
-        <SurfaceView
-            android:id="@+id/texturePreview"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+    <TextView
+        android:id="@+id/lblStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="8dp"
+        android:background="#66000000"
+        android:padding="8dp"
+        android:text="Đang khởi tạo..."
+        android:textColor="#FFFFFF"
+        android:textSize="12sp" />
 
-        <TextView
-            android:id="@+id/lblStatus"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_margin="8dp"
-            android:background="#66000000"
-            android:padding="8dp"
-            android:text="Đang khởi tạo..."
-            android:textColor="#FFFFFF"
-            android:textSize="12sp" />
+    <TextView
+        android:id="@+id/lblPerf"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:background="#99000000"
+        android:fontFamily="monospace"
+        android:padding="8dp"
+        android:textColor="#D6FFE5"
+        android:textSize="11sp" />
 
-        <TextView
-            android:id="@+id/lblPerf"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start"
-            android:layout_margin="8dp"
-            android:background="#99000000"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:textColor="#D6FFE5"
-            android:textSize="11sp" />
-    </FrameLayout>
-
-    <!-- Controls (scrolls if the screen is short). -->
+    <!-- Translucent controls floating over the camera at the bottom. -->
     <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="2"
-        android:background="#111111"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bottom_scrim"
         android:fillViewport="true">
 
         <LinearLayout
@@ -65,7 +57,9 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:background="@drawable/btn_translucent_bg"
                     android:text="Đổi cam"
+                    android:textColor="#FFFFFF"
                     android:textSize="12sp" />
 
                 <Button
@@ -73,7 +67,9 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:background="@drawable/btn_translucent_bg"
                     android:text="Chụp"
+                    android:textColor="#FFFFFF"
                     android:textSize="12sp" />
 
                 <Button
@@ -81,7 +77,9 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:background="@drawable/btn_translucent_bg"
                     android:text="Chọn ảnh"
+                    android:textColor="#FFFFFF"
                     android:textSize="12sp" />
 
                 <Button
@@ -89,7 +87,9 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
+                    android:background="@drawable/btn_translucent_bg"
                     android:text="Camera"
+                    android:textColor="#FFFFFF"
                     android:textSize="12sp" />
             </LinearLayout>
 
@@ -169,4 +169,4 @@
                 android:progress="0" />
         </LinearLayout>
     </ScrollView>
-</LinearLayout>
+</FrameLayout>
