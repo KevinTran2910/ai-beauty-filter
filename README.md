@@ -6,6 +6,8 @@ GPU-based beauty pipeline, and adjust the result live with sliders. Supported
 effects include skin smoothing, whitening, face slimming, eye enlargement, and
 blush. A real-time **Camera** mode is also available on physical iPhones.
 
+*You need to read the [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) first before keep strating*
+
 ## Detailed Documentation
 
 In addition to the quick guide in this README, the full documentation set lives
