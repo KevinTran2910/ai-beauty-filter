@@ -6,20 +6,26 @@ GPU-based beauty pipeline, and adjust the result live with sliders. Supported
 effects include skin smoothing, whitening, face slimming, eye enlargement, and
 blush. A real-time **Camera** mode is also available on physical iPhones.
 
-*You need to read the [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) first before keep strating*
+*You need to read the [docs/getting-started/usage-guide.md](docs/getting-started/usage-guide.md) first before you start.*
 
 ## Detailed Documentation
 
 In addition to the quick guide in this README, the full documentation set lives
-in `docs/`:
+in `docs/` (start from [docs/README.md](docs/README.md)):
 
-- [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md): system architecture,
-  source-code layout, image/camera flow, and how the native SDK is linked into
-  the app.
-- [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md): bootstrap steps, simulator/device
-  runs, component usage, and common troubleshooting.
-- [docs/IOS_INTEGRATION_GUIDE.md](docs/IOS_INTEGRATION_GUIDE.md): deeper
-  integration guidance for an iOS team, production packaging, native APIs,
+- [docs/getting-started/system-overview.md](docs/getting-started/system-overview.md):
+  system architecture, source-code layout, image/camera flow, and how the native
+  SDK is linked into the app.
+- [docs/getting-started/usage-guide.md](docs/getting-started/usage-guide.md):
+  bootstrap steps, simulator/device runs, component usage, and common
+  troubleshooting.
+- [docs/getting-started/build-guide.md](docs/getting-started/build-guide.md):
+  toolchain, dependencies, the podspec, and the device/simulator slice split.
+- [docs/reference/](docs/reference/): deep reference on the architecture, the
+  RN ↔ ObjC++ bridge, the filter pipeline, face landmarks, assets, and how to
+  extend filters.
+- [docs/integration/ios-integration-guide.md](docs/integration/ios-integration-guide.md):
+  deeper integration guidance for an iOS team, production packaging, native APIs,
   lifecycle, performance, and test plan.
 
 ## Directory Layout
@@ -176,4 +182,3 @@ models, and `libmars-face-kit.a`.
 - **Prebuilt SDK**: the SDK lives in `prebuilt-sdk/ios/` and is not rebuilt in
   this repository. If the C++ SDK source changes, rebuild it with the SDK's
   original toolchain and replace the contents under `prebuilt-sdk/ios/`.
-

@@ -238,4 +238,3 @@ Recommended minimum test groups:
 4. Packaging: create a production CocoaPod/SPM package and resource bundle.
 5. Production hardening: add benchmark, memory/FPS tests, lifecycle tests, and
    visual regression checks.
-

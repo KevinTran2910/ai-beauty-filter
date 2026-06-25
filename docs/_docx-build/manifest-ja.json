@@ -1,0 +1,18 @@
+{
+  "title": "AI Beauty Filter SDK",
+  "subtitle": "iOS 技術ドキュメント",
+  "tocTitle": "目次",
+  "footer": "AI Beauty Filter SDK — iOS",
+  "font": "Meiryo",
+  "output": "../dist/BeautyFilterSDK-iOS-Documentation-JA.docx",
+  "coverLines": [
+    "iOS 向けリアルタイム GPU 美容フィルタ",
+    "React Native + ObjC++ ブリッジ + ビルド済み GPUPixel エンジン",
+    "",
+    "バージョン 1.0.0",
+    "2026 年 6 月"
+  ],
+  "sections": [
+    "ja-src/full-ja.md"
+  ]
+}

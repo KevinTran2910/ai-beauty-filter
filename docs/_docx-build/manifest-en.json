@@ -1,0 +1,27 @@
+{
+  "title": "AI Beauty Filter SDK",
+  "subtitle": "iOS Technical Documentation",
+  "tocTitle": "Table of Contents",
+  "footer": "AI Beauty Filter SDK — iOS",
+  "output": "../dist/BeautyFilterSDK-iOS-Documentation-EN.docx",
+  "coverLines": [
+    "Real-time GPU beauty filtering for iOS",
+    "React Native + ObjC++ bridge + prebuilt GPUPixel engine",
+    "",
+    "Version 1.0.0",
+    "June 2026"
+  ],
+  "sections": [
+    "../getting-started/system-overview.md",
+    "../getting-started/usage-guide.md",
+    "../getting-started/build-guide.md",
+    "../reference/architecture.md",
+    "../reference/api-bridge.md",
+    "../reference/filter-pipeline.md",
+    "../reference/face-landmarks.md",
+    "../reference/assets-and-textures.md",
+    "../reference/extending-filters.md",
+    "../integration/ios-integration-guide.md",
+    "../presentation.md"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "title": "DAYO Beauty Filter",
+  "subtitle": "Tài liệu tổng quan kiến trúc & xử lý",
+  "tocTitle": "Mục lục",
+  "footer": "DAYO Beauty Filter — iOS",
+  "output": "../dist/DAYO_BeautyFilter_TongQuan_iOS_VI.docx",
+  "palette": {
+    "title": "1F3864",
+    "subtitle": "2E5AAC",
+    "heading1": "2E74B5",
+    "heading2": "2E74B5",
+    "heading3": "2E74B5",
+    "heading4": "5B5B5B",
+    "tableHeaderFill": "D9E2F3",
+    "tableBorder": "B7C4DC",
+    "codeFill": "F2F3F5",
+    "inlineCodeFill": "EEF0F3",
+    "calloutFill": "FFF4CE",
+    "calloutBorder": "E6C25C",
+    "rule": "B7C4DC",
+    "coverText": "444444",
+    "footer": "8A8A8A"
+  },
+  "coverLines": [
+    "App iOS làm đẹp camera thời gian thực — pipeline GPU (C++/OpenGL ES)",
+    "React Native + ObjC++ bridge + GPUPixel engine (prebuilt)",
+    "",
+    "Bản tiếng Việt · Module: ios",
+    "Phiên bản 1.0.0 · Tháng 6 năm 2026"
+  ],
+  "sections": [
+    "vi-src/tongquan-vi.md"
+  ]
+}
