@@ -1,21 +1,14 @@
 package com.aibeauty.beautyfilter;
 
 import android.Manifest;
-import android.content.ContentValues;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Debug;
-import android.os.Environment;
-import android.provider.MediaStore;
 import android.util.Log;
 import android.util.Size;
 import android.view.SurfaceHolder;
@@ -23,7 +16,6 @@ import android.view.SurfaceView;
 import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -60,17 +52,15 @@ import java.util.concurrent.Executors;
 /**
  * Live beauty-filter demo.
  *
- * <p>CameraX delivers RGBA frames to {@link #analyze}, which rotates them upright
- * (and mirrors the selfie camera), runs them through the native pipeline
- * ({@link BeautyFilterNative#processInto}) and paints the filtered result onto a
- * {@link SurfaceView}. Face detection ({@link BeautyFilterNative#detectFace}) is
- * the heaviest step, so it runs on a downscaled frame every {@code DETECT_EVERY}
- * frames; landmarks persist between detections. The five sliders drive smoothing
- * / whitening
+ * <p>CameraX delivers YUV frames to {@link #analyze}, which uploads them to the
+ * GPU (rotated upright and selfie-mirrored there), runs them through the native
+ * pipeline and paints the filtered result onto a {@link SurfaceView}. Face
+ * detection ({@link BeautyFilterNative#detectFace}) is the heaviest step, so it
+ * runs on a downscaled frame every {@code DETECT_EVERY} frames; landmarks persist
+ * between detections. The five sliders drive smoothing / whitening
  * ({@code BeautyFaceFilter}), face-slim / eye-enlarge ({@code FaceReshapeFilter})
  * and blusher ({@code BlusherFilter}); reshape and blusher are landmark-driven, so
- * they only show on detected faces. A picked gallery image can be used instead of
- * the camera, and the current frame can be captured to the gallery.
+ * they only show on detected faces.
  *
  * <p>All native access (init, per-frame processing, parameter setters, destroy) is
  * serialized on a single-thread executor, matching the native GL worker.
@@ -78,12 +68,10 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "BeautyFilterDemo";
-    private static final int MAX_PICKED_DIM = 1280;
 
     private SurfaceView texturePreview;
     private SurfaceHolder previewHolder;
     private TextView lblStatus;
-    private TextView lblPerf;
     private TextView lblSmoothing;
     private TextView lblWhitening;
     private TextView lblSlim;
@@ -101,8 +89,6 @@ public class MainActivity extends AppCompatActivity {
     private final ExecutorService cameraExecutor = Executors.newSingleThreadExecutor();
 
     private volatile boolean initialized = false;
-    private volatile boolean imageMode = false;
-    private volatile boolean captureRequested = false;
     private volatile boolean previewSurfaceReady = false;
 
     private boolean cameraPermissionGranted = false;
@@ -112,22 +98,13 @@ public class MainActivity extends AppCompatActivity {
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
     private ProcessCameraProvider cameraProvider;
 
-    private ActivityResultLauncher<String> pickImage;
     private ActivityResultLauncher<String> requestPermission;
 
     // --- cameraExecutor-only state (no synchronization needed) ---
     private static final int DETECT_EVERY = 2;     // run face detection every Nth frame
     private static final int DETECT_MAX_DIM = 320; // downscaled longest side for detection
 
-    private Bitmap currentImage;       // source for image mode
     private long frameCount;
-    private final PerfStats perfStats = new PerfStats();
-
-    // Native I/O — direct buffers so the JNI reads/writes without copies or allocs.
-    // Used by the image-mode (RGBA) path and the camera capture (YUV readback) path.
-    private ByteBuffer inBuffer;
-    private ByteBuffer outBuffer;
-    private Bitmap resultBitmap;
 
     // Detection downscale — reused.
     private Bitmap detectSrcBitmap;    // grayscale camera-orientation downscale (from Y plane)
@@ -157,7 +134,6 @@ public class MainActivity extends AppCompatActivity {
             public void surfaceChanged(
                     @NonNull SurfaceHolder holder, int format, int width, int height) {
                 previewSurfaceReady = true;
-                perfStats.setViewSize(width, height);
                 cameraExecutor.execute(() -> {
                     if (!initialized) {
                         return;
@@ -178,7 +154,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         lblStatus = findViewById(R.id.lblStatus);
-        lblPerf = findViewById(R.id.lblPerf);
         lblSmoothing = findViewById(R.id.lblSmoothing);
         lblWhitening = findViewById(R.id.lblWhitening);
         lblSlim = findViewById(R.id.lblSlim);
@@ -213,22 +188,6 @@ public class MainActivity extends AppCompatActivity {
         updateSliderLabels();
 
         ((Button) findViewById(R.id.btnSwitch)).setOnClickListener(v -> switchCamera());
-        ((Button) findViewById(R.id.btnCapture)).setOnClickListener(v -> {
-            captureRequested = true;
-            Toast.makeText(this, "Đang chụp...", Toast.LENGTH_SHORT).show();
-            // Camera mode captures on the next frame; image mode has no frame
-            // stream, so render the current image again to honour the request.
-            cameraExecutor.execute(() -> {
-                if (imageMode) {
-                    reprocessImage();
-                }
-            });
-        });
-        ((Button) findViewById(R.id.btnCamera)).setOnClickListener(v -> resumeCamera());
-
-        pickImage = registerForActivityResult(
-                new ActivityResultContracts.GetContent(), this::onImagePicked);
-        ((Button) findViewById(R.id.btnPick)).setOnClickListener(v -> pickImage.launch("image/*"));
 
         requestPermission = registerForActivityResult(
                 new ActivityResultContracts.RequestPermission(), granted -> {
@@ -236,11 +195,11 @@ public class MainActivity extends AppCompatActivity {
                     if (granted) {
                         maybeStartCamera();
                     } else {
-                        lblStatus.setText("Cần quyền Camera — bạn vẫn có thể bấm \"Chọn ảnh\".");
+                        showStatus("Need camera privilege to use this app");
                     }
                 });
 
-        // Initialise the native pipeline off the UI thread.
+        // Initialize the native pipeline off the UI thread.
         cameraExecutor.execute(this::initNative);
 
         // Ask for the camera once; the analyzer guards against frames arriving
@@ -256,7 +215,7 @@ public class MainActivity extends AppCompatActivity {
 
     // ----------------------------------------------------------------- native
 
-    /** Copies assets and initialises the native pipeline. Runs on cameraExecutor. */
+    /** Copies assets and initializes the native pipeline. Runs on cameraExecutor. */
     private void initNative() {
         try {
             copyAssetDir("res", new File(getFilesDir(), "res"));
@@ -272,19 +231,23 @@ public class MainActivity extends AppCompatActivity {
         }
         runOnUiThread(() -> {
             if (initialized) {
-                lblStatus.setText("Sẵn sàng");
+                lblStatus.setText("");
+                lblStatus.setVisibility(android.view.View.GONE);
                 pushParams(); // apply the slider defaults to the native pipeline
                 cameraExecutor.execute(() -> attachPreviewSurface(previewHolder));
             } else {
-                lblStatus.setText("Khởi tạo native THẤT BẠI (xem logcat)");
+                showStatus("Native initialization failed (check logcat)");
             }
         });
     }
 
     private float[] currentParams() {
+        // SeekBars run 0..100 (step 0.1 on a 0..10 scale); the native pipeline
+        // expects a 0..10 range, so scale down.
         return new float[]{
-                seekSmoothing.getProgress(), seekWhitening.getProgress(),
-                seekSlim.getProgress(), seekEye.getProgress(), seekBlush.getProgress()};
+                seekSmoothing.getProgress() / 10f, seekWhitening.getProgress() / 10f,
+                seekSlim.getProgress() / 10f, seekEye.getProgress() / 10f,
+                seekBlush.getProgress() / 10f};
     }
 
     /** Reads slider values on the UI thread, pushes them on cameraExecutor. */
@@ -295,9 +258,6 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             applyParams(p);
-            if (imageMode) {
-                reprocessImage();
-            }
         });
     }
 
@@ -317,14 +277,13 @@ public class MainActivity extends AppCompatActivity {
         if (width <= 0 || height <= 0) {
             return;
         }
-        perfStats.setViewSize(width, height);
         BeautyFilterNative.setOutputSurface(holder.getSurface(), width, height);
     }
 
     // ----------------------------------------------------------------- camera
 
     private void maybeStartCamera() {
-        if (!cameraPermissionGranted || imageMode) {
+        if (!cameraPermissionGranted) {
             return;
         }
         if (cameraProvider != null) {
@@ -337,8 +296,8 @@ public class MainActivity extends AppCompatActivity {
                 cameraProvider = cameraProviderFuture.get();
                 bindCamera();
             } catch (Exception e) {
-                Log.e(TAG, "camera provider failed", e);
-                lblStatus.setText("Không mở được camera (xem logcat).");
+                Log.e(TAG, "Camera provider failed", e);
+                showStatus("Cannot open camera (check logcat)");
             }
         }, ContextCompat.getMainExecutor(this));
     }
@@ -346,7 +305,7 @@ public class MainActivity extends AppCompatActivity {
     /** Must run on the main thread (CameraX requirement). */
     @ExperimentalCamera2Interop
     private void bindCamera() {
-        if (cameraProvider == null || imageMode) {
+        if (cameraProvider == null) {
             return;
         }
         // FPS test: 720p instead of 1080p. CameraX's internal YUV->RGBA conversion
@@ -369,7 +328,6 @@ public class MainActivity extends AppCompatActivity {
                 .setResolutionSelector(resolution);
 
         Range<Integer> targetFps = selectTargetFpsRange();
-        perfStats.setTargetFps(targetFps);
         // Prefer 60 fps when the selected camera advertises it.
         new Camera2Interop.Extender<>(analysisBuilder)
                 .setCaptureRequestOption(
@@ -383,7 +341,7 @@ public class MainActivity extends AppCompatActivity {
             cameraProvider.bindToLifecycle(this, cameraSelector, analysis);
         } catch (Exception e) {
             Log.e(TAG, "bindToLifecycle failed", e);
-            lblStatus.setText("Không gắn được camera (thiết bị thiếu cam?).");
+            lblStatus.setText("Cannot attach camera (lack of devices)");
         }
     }
 
@@ -420,7 +378,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Picks the best advertised AE FPS range for a smooth, high preview rate:
-     * the highest upper bound (best achievable rate), tie-broken by the highest
+     * the highest upper bound, tie-broken by the highest
      * lower bound. A high floor stops auto-exposure from dropping the frame rate
      * in dim light — the trade-off is a darker image when light is low. Returns
      * null if the camera advertises no ranges.
@@ -446,58 +404,21 @@ public class MainActivity extends AppCompatActivity {
         cameraSelector = frontCamera
                 ? CameraSelector.DEFAULT_FRONT_CAMERA
                 : CameraSelector.DEFAULT_BACK_CAMERA;
-        if (!imageMode) {
-            bindCamera();
-        }
-    }
-
-    private void resumeCamera() {
-        imageMode = false;
-        cameraExecutor.execute(() -> {
-            currentImage = null;
-            attachPreviewSurface(previewHolder);
-        });
-        maybeStartCamera();
-        lblStatus.setText("Camera");
+        bindCamera();
     }
 
     /** CameraX analyzer callback. Runs on cameraExecutor. */
     private void analyze(@NonNull ImageProxy image) {
-        long frameStartNs = System.nanoTime();
-        float detectMs = 0f;
         try {
-            if (imageMode) {
-                return;
-            }
-            int camW = image.getWidth();
-            int camH = image.getHeight();
-            perfStats.setCameraSize(camW, camH);
-            int rotationDegrees = image.getImageInfo().getRotationDegrees();
-            boolean swap = (rotationDegrees == 90 || rotationDegrees == 270);
-            int upW = swap ? camH : camW;   // upright (post-rotation) dimensions
-            int upH = swap ? camW : camH;
-            perfStats.setProcessedSize(upW, upH);
-
             if (initialized) {
+                int rotationDegrees = image.getImageInfo().getRotationDegrees();
                 int rotationMode = rotationModeFor(rotationDegrees, frontCamera);
-                boolean doDetect = (frameCount % DETECT_EVERY == 0);
-                if (doDetect) {
-                    detectMs = runDetectYuv(image, rotationDegrees, frontCamera);
+                if (frameCount % DETECT_EVERY == 0) {
+                    runDetectYuv(image, rotationDegrees, frontCamera);
                 }
-                if (captureRequested) {
-                    Bitmap filtered = processCaptureYuv(image, rotationMode, upW, upH);
-                    if (filtered != null) {
-                        deliver(filtered);
-                    }
-                } else {
-                    processPreviewYuv(image, rotationMode);
-                }
-                perfStats.pullNativeStats();
+                processPreviewYuv(image, rotationMode);
             }
             frameCount++;
-            // Upright time is now 0 — rotation/conversion moved off the CPU to the GPU.
-            perfStats.setTimings(elapsedMs(frameStartNs), 0f, detectMs);
-            perfStats.onFrameComplete();
         } catch (Throwable t) {
             Log.e(TAG, "analyze failed", t);
         } finally {
@@ -505,7 +426,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // gpupixel RotationMode ordinals (see include/gpupixel/sink/sink.h). Rotation
+    // RotationMode ordinals (see include/gpupixel/sink/sink.h). Rotation
     // is applied on the GPU; the selfie mirror is folded in here too. THIS TABLE
     // is the single place to adjust if the live preview shows up rotated or
     // mirror-flipped wrong — it's a Java-only change (no NDK rebuild needed).
@@ -519,17 +440,20 @@ public class MainActivity extends AppCompatActivity {
     private static final int ROT_180 = 7;           // Rotate180
 
     private static int rotationModeFor(int rotationDegrees, boolean mirror) {
-        // NOTE: includes a +180° correction over the naive mapping — the GPU
-        // sampling convention is rotated 180° from the camera's reported degrees,
-        // so each entry is its 180°-composed equivalent.
+        // Back camera (no mirror): rotate the camera buffer upright by the
+        // reported degrees. The naive mapping is correct here — an earlier +180
+        // "correction" left the back-camera preview upside down after switching.
         if (!mirror) {
             switch (rotationDegrees) {
-                case 90:  return ROT_LEFT;
-                case 180: return ROT_NONE;
-                case 270: return ROT_RIGHT;
-                default:  return ROT_180;   // 0°
+                case 90:  return ROT_RIGHT;
+                case 180: return ROT_180;
+                case 270: return ROT_LEFT;
+                default:  return ROT_NONE;  // 0°
             }
         }
+        // Front camera: same rotation plus the selfie mirror. This branch carries
+        // a +180° offset relative to the naive mapping to match the GPU sampling
+        // convention for the mirrored path.
         switch (rotationDegrees) {
             case 90:  return ROT_RIGHT_FLIP_V;
             case 180: return ROT_FLIP_H;
@@ -551,33 +475,14 @@ public class MainActivity extends AppCompatActivity {
                 p[1].getPixelStride(), rotationMode);
     }
 
-    /** Capture: render off-screen, read the upright RGBA result into resultBitmap. */
-    private Bitmap processCaptureYuv(ImageProxy image, int rotationMode, int upW, int upH) {
-        ensureProcessBuffers(upW, upH);
-        ImageProxy.PlaneProxy[] p = image.getPlanes();
-        outBuffer.rewind();
-        if (!BeautyFilterNative.processIntoYuv(
-                p[0].getBuffer(), p[1].getBuffer(), p[2].getBuffer(),
-                image.getWidth(), image.getHeight(),
-                p[0].getRowStride(), p[1].getRowStride(), p[2].getRowStride(),
-                p[1].getPixelStride(), rotationMode, outBuffer)) {
-            Log.e(TAG, "processIntoYuv failed");
-            return null;
-        }
-        outBuffer.rewind();
-        resultBitmap.copyPixelsFromBuffer(outBuffer);
-        return resultBitmap;
-    }
-
     /**
      * Face detection on a small, upright (selfie-mirrored) grayscale image built
-     * from the camera Y (luma) plane. Mirrors the orientation the GPU produces so
+     * from the camera Y plane. Mirrors the orientation the GPU produces so
      * the normalized landmarks line up with the rendered frame. The rotation here
      * uses Android's Matrix (the same math the app used previously), so it is
      * independent of the GPU RotationMode table.
      */
-    private float runDetectYuv(ImageProxy image, int rotationDegrees, boolean mirror) {
-        long detectStartNs = System.nanoTime();
+    private void runDetectYuv(ImageProxy image, int rotationDegrees, boolean mirror) {
         ImageProxy.PlaneProxy yPlane = image.getPlanes()[0];
         ByteBuffer yBuf = yPlane.getBuffer();
         int yRowStride = yPlane.getRowStride();
@@ -627,74 +532,6 @@ public class MainActivity extends AppCompatActivity {
         detectBuffer.rewind();
         detectBitmap.copyPixelsToBuffer(detectBuffer);
         BeautyFilterNative.detectFace(detectBuffer, dw, dh);
-        return elapsedMs(detectStartNs);
-    }
-
-    private static final class FrameResult {
-        final Bitmap bitmap;
-        final float detectMs;
-
-        FrameResult(Bitmap bitmap, float detectMs) {
-            this.bitmap = bitmap;
-            this.detectMs = detectMs;
-        }
-    }
-
-    /** Detect (optional) then run the pipeline; returns the reused result bitmap. */
-    private FrameResult processFrame(Bitmap upright, boolean doDetect) {
-        int w = upright.getWidth();
-        int h = upright.getHeight();
-        ensureProcessBuffers(w, h);
-
-        float detectMs = 0f;
-        if (doDetect) {
-            long detectStartNs = System.nanoTime();
-            runDetect(upright);
-            detectMs = elapsedMs(detectStartNs);
-        }
-
-        inBuffer.rewind();
-        upright.copyPixelsToBuffer(inBuffer);
-        outBuffer.rewind();
-        if (!BeautyFilterNative.processInto(inBuffer, w, h, outBuffer)) {
-            Log.e(TAG, "processInto failed");
-            return new FrameResult(null, detectMs);
-        }
-        outBuffer.rewind();
-        resultBitmap.copyPixelsFromBuffer(outBuffer);
-        perfStats.pullNativeStats();
-        return new FrameResult(resultBitmap, detectMs);
-    }
-
-    /** Runs face detection on a downscaled copy of {@code upright}. */
-    private void runDetect(Bitmap upright) {
-        int w = upright.getWidth();
-        int h = upright.getHeight();
-        int longest = Math.max(w, h);
-        float scale = longest > DETECT_MAX_DIM ? (float) DETECT_MAX_DIM / longest : 1f;
-        int dw = Math.max(1, Math.round(w * scale));
-        int dh = Math.max(1, Math.round(h * scale));
-        ensureDetectBuffers(dw, dh);
-
-        detectMatrix.reset();
-        detectMatrix.postScale((float) dw / w, (float) dh / h);
-        detectCanvas.drawBitmap(upright, detectMatrix, drawPaint);
-
-        detectBuffer.rewind();
-        detectBitmap.copyPixelsToBuffer(detectBuffer);
-        BeautyFilterNative.detectFace(detectBuffer, dw, dh);
-    }
-
-    private void ensureProcessBuffers(int w, int h) {
-        int n = w * h * 4;
-        if (inBuffer == null || inBuffer.capacity() != n) {
-            inBuffer = ByteBuffer.allocateDirect(n);
-            outBuffer = ByteBuffer.allocateDirect(n);
-        }
-        if (resultBitmap == null || resultBitmap.getWidth() != w
-                || resultBitmap.getHeight() != h) {
-            resultBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        }
     }
 
     private void ensureDetectBuffers(int dw, int dh) {
@@ -715,265 +552,24 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** Handles a capture request and paints still-image fallback output. */
-    private void deliver(Bitmap bmp) {
-        if (captureRequested) {
-            captureRequested = false;
-            saveToGallery(bmp.copy(Bitmap.Config.ARGB_8888, false));
-            if (!imageMode) {
-                return;
-            }
-        }
-        drawToTexture(bmp);
-    }
-
-    private void drawToTexture(Bitmap bmp) {
-        if (!previewSurfaceReady || previewHolder == null) {
-            return;
-        }
-        Canvas canvas = previewHolder.lockCanvas();
-        if (canvas == null) {
-            return;
-        }
-        try {
-            canvas.drawColor(Color.BLACK);
-            int vw = texturePreview.getWidth();
-            int vh = texturePreview.getHeight();
-            // Center-crop the frame to fill the view.
-            float scale = Math.max((float) vw / bmp.getWidth(), (float) vh / bmp.getHeight());
-            float dx = (vw - bmp.getWidth() * scale) / 2f;
-            float dy = (vh - bmp.getHeight() * scale) / 2f;
-            Matrix m = new Matrix();
-            m.postScale(scale, scale);
-            m.postTranslate(dx, dy);
-            canvas.drawBitmap(bmp, m, drawPaint);
-        } finally {
-            previewHolder.unlockCanvasAndPost(canvas);
-        }
-    }
-
-    // ------------------------------------------------------------ image mode
-
-    private void onImagePicked(Uri uri) {
-        if (uri == null) {
-            return;
-        }
-        imageMode = true;
-        if (cameraProvider != null) {
-            cameraProvider.unbindAll();
-        }
-        lblStatus.setText("Ảnh đã chọn");
-        cameraExecutor.execute(() -> {
-            if (initialized) {
-                BeautyFilterNative.clearOutputSurface();
-            }
-            try (InputStream in = getContentResolver().openInputStream(uri)) {
-                Bitmap decoded = BitmapFactory.decodeStream(in);
-                if (decoded == null) {
-                    return;
-                }
-                if (decoded.getConfig() != Bitmap.Config.ARGB_8888) {
-                    decoded = decoded.copy(Bitmap.Config.ARGB_8888, false);
-                }
-                currentImage = scaleDown(decoded, MAX_PICKED_DIM);
-                reprocessImage();
-            } catch (Exception e) {
-                Log.e(TAG, "decode picked image failed", e);
-            }
-        });
-    }
-
-    /** Re-runs the current still image through the pipeline. Runs on cameraExecutor. */
-    private void reprocessImage() {
-        if (!initialized || currentImage == null) {
-            return;
-        }
-        long frameStartNs = System.nanoTime();
-        perfStats.setCameraSize(currentImage.getWidth(), currentImage.getHeight());
-        perfStats.setProcessedSize(currentImage.getWidth(), currentImage.getHeight());
-        FrameResult result = processFrame(currentImage, true);
-        perfStats.setTimings(elapsedMs(frameStartNs), 0f, result.detectMs);
-        perfStats.onFrameComplete();
-        if (result.bitmap != null) {
-            deliver(result.bitmap);
-        }
-    }
-
-    private static Bitmap scaleDown(Bitmap src, int maxDim) {
-        int longest = Math.max(src.getWidth(), src.getHeight());
-        if (longest <= maxDim) {
-            return src.getConfig() == Bitmap.Config.ARGB_8888
-                    ? src : src.copy(Bitmap.Config.ARGB_8888, false);
-        }
-        float scale = (float) maxDim / longest;
-        Bitmap scaled = Bitmap.createScaledBitmap(
-                src, Math.round(src.getWidth() * scale), Math.round(src.getHeight() * scale), true);
-        return scaled.getConfig() == Bitmap.Config.ARGB_8888
-                ? scaled : scaled.copy(Bitmap.Config.ARGB_8888, false);
-    }
-
-    // -------------------------------------------------------------- capture
-
-    /** Writes a JPEG to the gallery (API 29+) or app external storage. */
-    private void saveToGallery(Bitmap bmp) {
-        String name = "beauty_" + System.currentTimeMillis() + ".jpg";
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
-                values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-                values.put(MediaStore.Images.Media.RELATIVE_PATH,
-                        Environment.DIRECTORY_PICTURES + "/BeautyFilter");
-                Uri uri = getContentResolver().insert(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
-                if (uri == null) {
-                    throw new Exception("MediaStore insert returned null");
-                }
-                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 95, os);
-                }
-                toast("Đã lưu vào Thư viện");
-            } else {
-                File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-                File file = new File(dir, name);
-                try (OutputStream os = new FileOutputStream(file)) {
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 95, os);
-                }
-                toast("Đã lưu: " + file.getAbsolutePath());
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "save failed", e);
-            toast("Lưu ảnh thất bại");
-        }
-    }
-
-    private void toast(String msg) {
-        runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
-    }
-
     // ----------------------------------------------------------------- misc
 
-    private static float elapsedMs(long startNs) {
-        return (System.nanoTime() - startNs) / 1_000_000f;
-    }
-
-    private final class PerfStats {
-        private static final long UI_UPDATE_NS = 500_000_000L;
-
-        private long windowStartNs = System.nanoTime();
-        private long lastUiUpdateNs = windowStartNs;
-        private long lastCpuMs = android.os.Process.getElapsedCpuTime();
-        private int completedFrames;
-        private float fps;
-        private float cpuPercent;
-
-        private int cameraWidth;
-        private int cameraHeight;
-        private int processedWidth;
-        private int processedHeight;
-        private int viewWidth;
-        private int viewHeight;
-        private String targetFps = "n/a";
-
-        private float frameMs;
-        private float uprightMs;
-        private float detectMs;
-        private float nativePreviewMs;
-        private float readbackMs;
-        private float intervalMs;   // avg wall time between consecutive frames
-
-        void setTargetFps(Range<Integer> range) {
-            targetFps = range == null ? "n/a" : range.getLower() + "-" + range.getUpper();
-        }
-
-        void setCameraSize(int width, int height) {
-            cameraWidth = width;
-            cameraHeight = height;
-        }
-
-        void setProcessedSize(int width, int height) {
-            processedWidth = width;
-            processedHeight = height;
-        }
-
-        void setViewSize(int width, int height) {
-            viewWidth = width;
-            viewHeight = height;
-        }
-
-        void setTimings(float frame, float upright, float detect) {
-            frameMs = frame;
-            uprightMs = upright;
-            detectMs = detect;
-        }
-
-        void pullNativeStats() {
-            if (!initialized) {
-                return;
-            }
-            float[] nativeStats = BeautyFilterNative.getPerfStats();
-            if (nativeStats == null || nativeStats.length < 4) {
-                return;
-            }
-            nativePreviewMs = nativeStats[0];
-            readbackMs = nativeStats[1];
-            if (nativeStats[2] > 0 && nativeStats[3] > 0) {
-                viewWidth = Math.round(nativeStats[2]);
-                viewHeight = Math.round(nativeStats[3]);
-            }
-        }
-
-        void onFrameComplete() {
-            completedFrames++;
-            long nowNs = System.nanoTime();
-            long elapsedNs = nowNs - windowStartNs;
-            if (elapsedNs <= 0 || nowNs - lastUiUpdateNs < UI_UPDATE_NS) {
-                return;
-            }
-
-            fps = completedFrames * 1_000_000_000f / elapsedNs;
-            intervalMs = elapsedNs / 1_000_000f / completedFrames;
-            long cpuMs = android.os.Process.getElapsedCpuTime();
-            long wallMs = elapsedNs / 1_000_000L;
-            int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
-            cpuPercent = wallMs > 0 ? ((cpuMs - lastCpuMs) * 100f) / (wallMs * cores) : 0f;
-            lastCpuMs = cpuMs;
-            windowStartNs = nowNs;
-            lastUiUpdateNs = nowNs;
-            completedFrames = 0;
-            pullNativeStats();
-
-            String text = format();
-            runOnUiThread(() -> lblPerf.setText(text));
-        }
-
-        private String format() {
-            Debug.MemoryInfo memoryInfo = new Debug.MemoryInfo();
-            Debug.getMemoryInfo(memoryInfo);
-            int memMb = memoryInfo.getTotalPss() / 1024;
-            return String.format(Locale.US,
-                    "FPS %.1f / target %s\n"
-                            + "Cam %dx%d -> Proc %dx%d | View %dx%d\n"
-                            + "CPU app %.0f%% | Mem %d MB\n"
-                            + "Interval %.1f ms (idle %.1f) | Frame %.1f ms\n"
-                            + "Upright %.1f | Detect %.1f/%df\n"
-                            + "Native %.1f ms | Readback %.1f ms",
-                    fps, targetFps,
-                    cameraWidth, cameraHeight, processedWidth, processedHeight,
-                    viewWidth, viewHeight,
-                    cpuPercent, memMb,
-                    intervalMs, Math.max(0f, intervalMs - frameMs), frameMs,
-                    uprightMs, detectMs, DETECT_EVERY,
-                    nativePreviewMs, readbackMs);
-        }
+    /** Shows a status/error message on the centred preview label. */
+    private void showStatus(String msg) {
+        lblStatus.setText(msg);
+        lblStatus.setVisibility(android.view.View.VISIBLE);
     }
 
     private void updateSliderLabels() {
-        lblSmoothing.setText("Làm mịn da: " + seekSmoothing.getProgress());
-        lblWhitening.setText("Làm trắng: " + seekWhitening.getProgress());
-        lblSlim.setText("Thon mặt: " + seekSlim.getProgress());
-        lblEye.setText("To mắt: " + seekEye.getProgress());
-        lblBlush.setText("Má hồng: " + seekBlush.getProgress());
+        lblSmoothing.setText(fmtValue(seekSmoothing));
+        lblWhitening.setText(fmtValue(seekWhitening));
+        lblSlim.setText(fmtValue(seekSlim));
+        lblEye.setText(fmtValue(seekEye));
+        lblBlush.setText(fmtValue(seekBlush));
+    }
+
+    private static String fmtValue(SeekBar sb) {
+        return String.format(Locale.US, "%.1f", sb.getProgress() / 10f);
     }
 
     private boolean hasAsset(String path) {

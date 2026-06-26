@@ -1,172 +1,250 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#111111"
+    android:orientation="vertical">
 
-    <!-- Live (or picked-image) filtered output, fills the whole screen. -->
-    <SurfaceView
-        android:id="@+id/texturePreview"
+    <!-- Top action row (iOS-style pill). -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <TextView
-        android:id="@+id/lblStatus"
-        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_margin="8dp"
-        android:background="#66000000"
-        android:padding="8dp"
-        android:text="Đang khởi tạo..."
-        android:textColor="#FFFFFF"
-        android:textSize="12sp" />
+        android:orientation="horizontal"
+        android:padding="12dp">
 
-    <TextView
-        android:id="@+id/lblPerf"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|end"
-        android:layout_margin="8dp"
-        android:background="#99000000"
-        android:fontFamily="monospace"
-        android:padding="8dp"
-        android:textColor="#D6FFE5"
-        android:textSize="11sp" />
+        <Button
+            android:id="@+id/btnSwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/pill_pink"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:stateListAnimator="@null"
+            android:text="Đổi cam"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
-    <!-- Translucent controls floating over the camera at the bottom. -->
+    <!-- Preview card (fills remaining space). -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/preview_card">
+
+        <SurfaceView
+            android:id="@+id/texturePreview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/lblStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="16dp"
+            android:text="Đang khởi tạo..."
+            android:textColor="#777777"
+            android:textSize="16sp" />
+    </FrameLayout>
+
+    <!-- Slider controls. -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="@drawable/bottom_scrim"
         android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="12dp">
+            android:paddingHorizontal="16dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="24dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <Button
-                    android:id="@+id/btnSwitch"
-                    android:layout_width="0dp"
+                <TextView
+                    android:layout_width="70dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:background="@drawable/btn_translucent_bg"
-                    android:text="Đổi cam"
-                    android:textColor="#FFFFFF"
-                    android:textSize="12sp" />
+                    android:text="Làm mịn"
+                    android:textColor="#DDDDDD"
+                    android:textSize="14sp" />
 
-                <Button
-                    android:id="@+id/btnCapture"
+                <SeekBar
+                    android:id="@+id/seekSmoothing"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="36dp"
                     android:layout_weight="1"
-                    android:background="@drawable/btn_translucent_bg"
-                    android:text="Chụp"
-                    android:textColor="#FFFFFF"
-                    android:textSize="12sp" />
+                    android:max="100"
+                    android:progress="60"
+                    android:progressBackgroundTint="#555555"
+                    android:progressTint="#ff5c8a"
+                    android:thumbTint="#ff5c8a" />
 
-                <Button
-                    android:id="@+id/btnPick"
-                    android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/lblSmoothing"
+                    android:layout_width="40dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:background="@drawable/btn_translucent_bg"
-                    android:text="Chọn ảnh"
-                    android:textColor="#FFFFFF"
-                    android:textSize="12sp" />
-
-                <Button
-                    android:id="@+id/btnCamera"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:background="@drawable/btn_translucent_bg"
-                    android:text="Camera"
-                    android:textColor="#FFFFFF"
-                    android:textSize="12sp" />
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:text="6.0"
+                    android:textColor="#ff5c8a"
+                    android:textSize="13sp" />
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/lblSmoothing"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="Làm mịn da: 7"
-                android:textColor="#EEEEEE" />
-
-            <SeekBar
-                android:id="@+id/seekSmoothing"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="10"
-                android:progress="7" />
+                android:layout_marginBottom="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/lblWhitening"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Làm trắng: 2"
-                android:textColor="#EEEEEE" />
+                <TextView
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:text="Trắng da"
+                    android:textColor="#DDDDDD"
+                    android:textSize="14sp" />
 
-            <SeekBar
-                android:id="@+id/seekWhitening"
+                <SeekBar
+                    android:id="@+id/seekWhitening"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="40"
+                    android:progressBackgroundTint="#555555"
+                    android:progressTint="#ff5c8a"
+                    android:thumbTint="#ff5c8a" />
+
+                <TextView
+                    android:id="@+id/lblWhitening"
+                    android:layout_width="40dp"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:text="4.0"
+                    android:textColor="#ff5c8a"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="10"
-                android:progress="2" />
+                android:layout_marginBottom="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/lblSlim"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Thon mặt: 0"
-                android:textColor="#EEEEEE" />
+                <TextView
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:text="Thon mặt"
+                    android:textColor="#DDDDDD"
+                    android:textSize="14sp" />
 
-            <SeekBar
-                android:id="@+id/seekSlim"
+                <SeekBar
+                    android:id="@+id/seekSlim"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="30"
+                    android:progressBackgroundTint="#555555"
+                    android:progressTint="#ff5c8a"
+                    android:thumbTint="#ff5c8a" />
+
+                <TextView
+                    android:id="@+id/lblSlim"
+                    android:layout_width="40dp"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:text="3.0"
+                    android:textColor="#ff5c8a"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="10"
-                android:progress="0" />
+                android:layout_marginBottom="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/lblEye"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="To mắt: 0"
-                android:textColor="#EEEEEE" />
+                <TextView
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:text="To mắt"
+                    android:textColor="#DDDDDD"
+                    android:textSize="14sp" />
 
-            <SeekBar
-                android:id="@+id/seekEye"
+                <SeekBar
+                    android:id="@+id/seekEye"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="30"
+                    android:progressBackgroundTint="#555555"
+                    android:progressTint="#ff5c8a"
+                    android:thumbTint="#ff5c8a" />
+
+                <TextView
+                    android:id="@+id/lblEye"
+                    android:layout_width="40dp"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:text="3.0"
+                    android:textColor="#ff5c8a"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="10"
-                android:progress="0" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/lblBlush"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Má hồng: 0"
-                android:textColor="#EEEEEE" />
+                <TextView
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:text="Má hồng"
+                    android:textColor="#DDDDDD"
+                    android:textSize="14sp" />
 
-            <SeekBar
-                android:id="@+id/seekBlush"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="10"
-                android:progress="0" />
+                <SeekBar
+                    android:id="@+id/seekBlush"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="20"
+                    android:progressBackgroundTint="#555555"
+                    android:progressTint="#ff5c8a"
+                    android:thumbTint="#ff5c8a" />
+
+                <TextView
+                    android:id="@+id/lblBlush"
+                    android:layout_width="40dp"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:text="2.0"
+                    android:textColor="#ff5c8a"
+                    android:textSize="13sp" />
+            </LinearLayout>
         </LinearLayout>
     </ScrollView>
-</FrameLayout>
+</LinearLayout>
