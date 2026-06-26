@@ -52,9 +52,6 @@ cp "${ROOT}/app-template/src/index.ts" "${APP}/src/index.ts"
 PODFILE="${APP}/ios/Podfile"
 if ! grep -q "BeautyFilterSDK" "${PODFILE}"; then
   echo "=== Thêm pod 'BeautyFilterSDK' vào Podfile ==="
-  # Chèn ngay sau dòng "target '<APP_NAME>' do".
-  # podspec nằm ở GỐC REPO (cùng cấp bootstrap.sh). Từ <app>/ios lên gốc repo là
-  # 2 cấp: ../.. — dùng đường dẫn TƯƠNG ĐỐI để Podfile portable sang máy khác.
   /usr/bin/awk -v name="${APP_NAME}" '
     { print }
     $0 ~ "target '\''" name "'\'' do" {
@@ -89,7 +86,7 @@ echo "=== pod install (RCT_NEW_ARCH_ENABLED=0) ==="
 
 cat <<EOF
 
-✅ Hoàn tất!
+Hoàn tất!
 
 Chạy nhanh trên SIMULATOR (làm mịn + trắng da; face detection tắt trên simulator):
   cd ${APP_NAME}
