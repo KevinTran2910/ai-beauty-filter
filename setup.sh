@@ -13,7 +13,7 @@
 #   3. Khai báo plugin trong app.json + đặt App.tsx demo.
 #   4. expo prebuild (plugin chèn pod + quyền) — sẵn sàng run:ios.
 #
-# Yêu cầu: macOS + Xcode, Node.js (>=18), CocoaPods.
+# Yêu cầu: macOS + Xcode 16.1+, Node.js 20.19+, CocoaPods 1.13+ (Expo SDK 54 / RN 0.81).
 # =============================================================================
 set -euo pipefail
 
@@ -25,10 +25,42 @@ MODULE_DST="${APP}/modules/beautyfilter-sdk"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Thiếu '$1'. $2"; exit 1; }; }
 
+# ver_ge A B -> trả 0 (true) nếu A >= B. Không dùng 'sort -V' vì BSD sort trên
+# macOS không hỗ trợ; viết thuần bash 3.2 (bash mặc định của macOS).
+ver_ge() {
+  local IFS=. i
+  local -a a=($1) b=($2)
+  for ((i=0; i<${#b[@]}; i++)); do
+    local x="${a[i]:-0}" y="${b[i]:-0}"
+    x="${x%%[!0-9]*}"; y="${y%%[!0-9]*}"   # bỏ hậu tố không phải số (vd 16.1-beta)
+    x="${x:-0}"; y="${y:-0}"
+    if ((10#$x > 10#$y)); then return 0; fi
+    if ((10#$x < 10#$y)); then return 1; fi
+  done
+  return 0
+}
+
+# need_version "tên" "ver hiện tại" "ver tối thiểu" "gợi ý"
+need_version() {
+  local name="$1" cur="$2" min="$3" hint="$4"
+  [[ -n "$cur" ]] || { echo "Không đọc được version của '$name'. $hint"; exit 1; }
+  ver_ge "$cur" "$min" || { echo "'$name' $cur < $min (yêu cầu của Expo SDK 54). $hint"; exit 1; }
+}
+
 [[ "$(uname)" == "Darwin" ]] || { echo "Cần chạy trên macOS (Xcode)."; exit 1; }
 need node "Cài qua https://nodejs.org hoặc 'brew install node'."
 need npx  "Đi kèm Node.js."
 need pod  "Cài CocoaPods: 'sudo gem install cocoapods' hoặc 'brew install cocoapods'."
+need xcodebuild "Cài Xcode đầy đủ từ App Store, rồi 'sudo xcode-select -s /Applications/Xcode.app'."
+
+# ---- Kiểm tra version theo yêu cầu Expo SDK 54 / RN 0.81 --------------------
+# Nguồn: docs.expo.dev/versions/v54.0.0 (Node 20.19+, Xcode 16.1+, iOS 15.1+).
+need_version "Node.js"   "$(node -v | sed 's/^v//')"                       "20.19.0" \
+  "Expo SDK 54 cần Node >= 20.19. Nâng cấp bằng nvm hoặc 'brew upgrade node'."
+need_version "Xcode"     "$(xcodebuild -version 2>/dev/null | head -1 | awk '{print $2}')" "16.1" \
+  "Expo SDK 54 (RN 0.81) cần Xcode >= 16.1. Cập nhật qua App Store."
+need_version "CocoaPods" "$(pod --version 2>/dev/null)"                     "1.13.0" \
+  "Nâng cấp: 'sudo gem install cocoapods' hoặc 'brew upgrade cocoapods'."
 
 [[ -d "${MODULE_SRC}/prebuilt-sdk/ios/BeautyFilter.xcframework" ]] || {
   echo "Không thấy ${MODULE_SRC}/prebuilt-sdk/ios/BeautyFilter.xcframework — module thiếu native SDK."
@@ -39,8 +71,10 @@ need pod  "Cài CocoaPods: 'sudo gem install cocoapods' hoặc 'brew install coc
 if [[ -d "${APP}" ]]; then
   echo "${APP_NAME}/ đã tồn tại — bỏ qua bước tạo app, chỉ cập nhật module/overlay."
 else
-  echo "=== Tạo app Expo: ${APP_NAME} ==="
-  ( cd "${ROOT}" && npx create-expo-app@latest "${APP_NAME}" --template blank-typescript )
+  echo "=== Tạo app Expo: ${APP_NAME} (pin SDK 54) ==="
+  # Pin template về dist-tag sdk-54: '@latest' hiện trỏ SDK 56 → lệch native bridge.
+  # Tag sdk-54 tự lấy patch 54.x mới nhất nên vẫn cố định major SDK.
+  ( cd "${ROOT}" && npx create-expo-app@latest "${APP_NAME}" --template expo-template-blank-typescript@sdk-54 )
 fi
 
 # ---- 2. Cài dependencies ----------------------------------------------------
@@ -76,8 +110,8 @@ echo "=== Đặt App.tsx demo ==="
 cp "${ROOT}/example/App.tsx" "${APP}/App.tsx"
 
 # ---- 5. Prebuild (sinh ios/, plugin chèn pod + quyền) -----------------------
-echo "=== expo prebuild -p ios (RCT_NEW_ARCH_ENABLED=0) ==="
-( cd "${APP}" && RCT_NEW_ARCH_ENABLED=0 npx expo prebuild -p ios --clean )
+echo "=== expo prebuild -p ios (New Architecture, khớp app.json newArchEnabled) ==="
+( cd "${APP}" && npx expo prebuild -p ios --clean )
 
 cat <<EOF
 
