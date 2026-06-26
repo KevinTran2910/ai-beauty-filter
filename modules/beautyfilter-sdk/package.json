@@ -1,0 +1,16 @@
+{
+  "name": "beautyfilter-sdk",
+  "version": "1.0.0",
+  "description": "AI Beauty Filter (GPUPixel + MNN) cho Expo — config plugin + JS wrapper.",
+  "main": "src/index.ts",
+  "author": "BeautyFilter <khanh.tran8@ntq-solution.com.vn>",
+  "license": "MIT",
+  "expo": {
+    "plugin": "./app.plugin.js"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

@@ -1,0 +1,21 @@
+#pragma once
+
+#include "gpupixel/gpupixel_define.h"
+#include "gpupixel/filter/filter.h"
+
+namespace gpupixel {
+class GPUPIXEL_API HueFilter : public Filter {
+ public:
+  static std::shared_ptr<HueFilter> Create();
+  bool Init();
+  virtual bool DoRender(bool updateSinks = true) override;
+
+  void setHueAdjustment(float hue_adjustment);
+
+ protected:
+  HueFilter() {};
+
+  float hue_adjustment_;
+};
+
+}  // namespace gpupixel
