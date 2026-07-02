@@ -47,5 +47,13 @@ Pod::Spec.new do |s|
     'OTHER_LDFLAGS[sdk=iphoneos*]'                => '$(inherited) -framework MNN -framework CoreML -framework Metal -l"mars-face-kit"',
   }
 
+  # pod_target_xcconfig OTHER_LDFLAGS không lan sang app target — libbeautyfilter.a
+  # (device) vẫn thiếu MarsFaceLandmarker::Create() khi link app nếu không khai báo ở đây.
+  s.user_target_xcconfig = {
+    'FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]' => '$(inherited) "$(PODS_ROOT)/../../modules/beautyfilter-sdk/prebuilt-sdk/ios"',
+    'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]'   => '$(inherited) "$(PODS_ROOT)/../../modules/beautyfilter-sdk/prebuilt-sdk/ios"',
+    'OTHER_LDFLAGS[sdk=iphoneos*]'          => '$(inherited) -framework MNN -framework CoreML -framework Metal -l"mars-face-kit"',
+  }
+
   s.requires_arc     = true
 end
