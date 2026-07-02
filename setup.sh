@@ -66,6 +66,10 @@ need_version "CocoaPods" "$(pod --version 2>/dev/null)"                     "1.1
   echo "Không thấy ${MODULE_SRC}/prebuilt-sdk/ios/BeautyFilter.xcframework — module thiếu native SDK."
   exit 1
 }
+[[ -f "${MODULE_SRC}/prebuilt-sdk/ios/libmars-face-kit.a" ]] || {
+  echo "Không thấy ${MODULE_SRC}/prebuilt-sdk/ios/libmars-face-kit.a — thiếu thư viện face detection (device)."
+  exit 1
+}
 
 # ---- 1. Tạo app Expo (nếu chưa có) ------------------------------------------
 if [[ -d "${APP}" ]]; then
@@ -86,6 +90,34 @@ echo "=== Copy module beautyfilter-sdk (kèm native) ==="
 rm -rf "${MODULE_DST}"
 mkdir -p "${MODULE_DST}"
 cp -R "${MODULE_SRC}/." "${MODULE_DST}/"
+
+# Podspec phải khai báo user_target_xcconfig để app target link libmars-face-kit.a
+# (device). Thiếu bước này → lỗi linker: mars_vision::MarsFaceLandmarker::Create().
+node - "${MODULE_DST}/BeautyFilterSDK.podspec" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+let txt = fs.readFileSync(file, 'utf8');
+if (txt.includes('s.user_target_xcconfig')) {
+  console.log('  -> podspec đã có user_target_xcconfig (link mars-face-kit cho device).');
+} else {
+  const block = `
+  # pod_target_xcconfig OTHER_LDFLAGS không lan sang app target — libbeautyfilter.a
+  # (device) vẫn thiếu MarsFaceLandmarker::Create() khi link app nếu không khai báo ở đây.
+  s.user_target_xcconfig = {
+    'FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]' => '$(inherited) "$(PODS_ROOT)/../../modules/beautyfilter-sdk/prebuilt-sdk/ios"',
+    'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]'   => '$(inherited) "$(PODS_ROOT)/../../modules/beautyfilter-sdk/prebuilt-sdk/ios"',
+    'OTHER_LDFLAGS[sdk=iphoneos*]'          => '$(inherited) -framework MNN -framework CoreML -framework Metal -l"mars-face-kit"',
+  }
+`;
+  if (!txt.includes('s.requires_arc')) {
+    console.error('Không vá được podspec: thiếu s.requires_arc');
+    process.exit(1);
+  }
+  txt = txt.replace(/\n\s*s\.requires_arc/, `${block}\n  s.requires_arc`);
+  fs.writeFileSync(file, txt);
+  console.log('  -> đã thêm user_target_xcconfig vào BeautyFilterSDK.podspec.');
+}
+NODE
 
 # Để app import được 'beautyfilter-sdk' như package: link vào node_modules.
 ( cd "${APP}" && npm install "./modules/beautyfilter-sdk" )
