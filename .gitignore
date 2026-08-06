@@ -5,3 +5,6 @@ node_modules/
 
 # LƯU Ý: native-bridge/ và prebuilt-sdk/ trong modules/beautyfilter-sdk/ ĐƯỢC
 # commit (gói tự chứa qua git). KHÔNG ignore chúng.
+
+# macOS
+.DS_Store

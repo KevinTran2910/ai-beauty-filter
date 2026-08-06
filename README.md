@@ -61,7 +61,7 @@ The project follows a **three-layer** design: JavaScript UI → React Native bri
 Unlike a bare React Native project where `Podfile` and `Info.plist` are edited manually, this Expo setup uses:
 
 - `**app.plugin.js`** — Expo config plugin that injects the `BeautyFilterSDK` pod and camera/photo-library permission strings on every `expo prebuild`.
-- `**BeautyFilterSDK.podspec**` — CocoaPods spec linking the bridge sources, `BeautyFilter.xcframework`, resources, and device-only face-detection libraries.
+- `**BeautyFilterSDK.podspec`** — CocoaPods spec linking the bridge sources, `BeautyFilter.xcframework`, resources, and device-only face-detection libraries.
 - `**expo-dev-client**` — Custom development client required because the beauty filter uses native code not available in Expo Go.
 
 Because `expo prebuild` regenerates `ios/`, **never hand-edit** the generated `Podfile` or `Info.plist`. All native wiring goes through the config plugin and podspec.
@@ -250,13 +250,13 @@ Shader and model files from `prebuilt-sdk/ios/res` and `prebuilt-sdk/ios/models`
 **Parameter mapping (UI 0–10 → engine internal)**
 
 
-| Prop         | Native setter    | Engine API                            | Scale factor    |
-| ------------ | ---------------- | ------------------------------------- | --------------- |
-| `smoothing`  | `setSmoothing:`  | `BeautyFaceFilter::SetBlurAlpha`      | `value / 10.0`  |
-| `whitening`  | `setWhitening:`  | `BeautyFaceFilter::SetWhite`          | `value / 20.0`  |
-| `faceSlim`   | `setFaceSlim:`   | `FaceReshapeFilter::SetFaceSlimLevel` | `value / 200.0` |
-| `eyeEnlarge` | `setEyeEnlarge:` | `FaceReshapeFilter::SetEyeZoomLevel`  | `value / 100.0` |
-| `blusher`    | `setBlusher:`    | `BlusherFilter::SetBlendLevel`        | `value / 10.0`  |
+| Prop         | Native setter    | Engine API                            | Scale factor   |
+| ------------ | ---------------- | ------------------------------------- | -------------- |
+| `smoothing`  | `setSmoothing:`  | `BeautyFaceFilter::SetBlurAlpha`      | `value / 10.0` |
+| `whitening`  | `setWhitening:`  | `BeautyFaceFilter::SetWhite`          | `value / 10.0` |
+| `faceSlim`   | `setFaceSlim:`   | `FaceReshapeFilter::SetFaceSlimLevel` | `value / 10.0` |
+| `eyeEnlarge` | `setEyeEnlarge:` | `FaceReshapeFilter::SetEyeZoomLevel`  | `value / 10.0` |
+| `blusher`    | `setBlusher:`    | `BlusherFilter::SetBlendLevel`        | `value / 10.0` |
 
 
 ### 4.2 Static image mode (`GPUPixelImageView`)
@@ -270,7 +270,7 @@ Triggered when `imageUri` or any filter prop changes.
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 2. _scheduleReprocess — coalesce multiple prop updates into one │
-│    dispatch_async(main_queue) per runloop                         │
+│    dispatch_async(main_queue) per runloop                       │
 └────────────────────────────┬────────────────────────────────────┘
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -292,7 +292,7 @@ Triggered when `imageUri` or any filter prop changes.
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 6. Face detection (device only, #ifdef GPUPIXEL_ENABLE_FACE_…)  │
-│    FaceDetector::Detect(RGBA, PICTURE mode) → landmarks vector   │
+│    FaceDetector::Detect(RGBA, PICTURE mode) → landmarks vector  │
 │    → SetFaceLandmarks on BlusherFilter + FaceReshapeFilter      │
 └────────────────────────────┬────────────────────────────────────┘
                              ▼
